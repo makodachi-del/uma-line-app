@@ -1,0 +1,17 @@
+{
+  "name": "uma-line-app",
+  "version": "1.0.0",
+  "description": "LINE競馬AI うまデータちゃん",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "^9.5.0",
+    "express": "^4.18.2",
+    "openai": "^4.80.1"
+  },
+  "engines": {
+    "node": "20.x"
+  }
+}
