@@ -44,6 +44,11 @@ async function handleEvent(event) {
     "明日の重賞",
     "予想",
     "競馬予想",
+    "分析",
+    "検証",
+    "反省",
+    "集計",
+    "結果",
   ];
 
   const shouldUseAI = allowedMessages.some((word) =>
@@ -54,24 +59,46 @@ async function handleEvent(event) {
     return client.replyMessage(event.replyToken, {
       type: "text",
       text:
-        "うまデータちゃんです🐴\n\n使える言葉はこちらです。\n・テスト\n・今日の重賞\n・今週の重賞\n・明日の重賞\n・予想\n\n※この返信ではAIを使っていないので、API料金はほぼ減りません。",
+        "うまデータちゃんです🐴\n\n使える言葉はこちらです。\n・テスト\n・今日の重賞\n・今週の重賞\n・明日の重賞\n・予想\n・分析\n・検証\n・反省\n・集計\n・結果",
     });
   }
 
   try {
+    // =========================
+    // AIモデル自動切り替え
+    // =========================
+
+    let modelName = "gpt-4o-mini";
+
+    if (
+      userMessage.includes("分析") ||
+      userMessage.includes("検証") ||
+      userMessage.includes("反省") ||
+      userMessage.includes("集計") ||
+      userMessage.includes("結果")
+    ) {
+      modelName = "gpt-4o";
+    }
+
+    // =========================
+    // OpenAI
+    // =========================
+
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: modelName,
+
       messages: [
         {
           role: "system",
           content:
-            "あなたはLINE競馬AI「うまデータちゃん」です。JRA平地レースを中心に、やさしく分かりやすく競馬予想を返答してください。的中や利益は保証せず、無理な購入はすすめないでください。返答は長くしすぎず、LINEで読みやすくしてください。",
+            "あなたはLINE競馬AI『うまデータちゃん』です。JRA平地レースを中心に、やさしく分かりやすく競馬予想を返答してください。予想・印・簡単な解説・回顧・分析にも対応してください。的中や利益は保証せず、無理な購入はすすめないでください。返答は長くしすぎず、LINEで読みやすくしてください。",
         },
         {
           role: "user",
           content: userMessage,
         },
       ],
+
       max_tokens: 700,
       temperature: 0.7,
     });
@@ -100,6 +127,7 @@ app.get("/", (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
+
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
