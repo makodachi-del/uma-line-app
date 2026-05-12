@@ -1,76 +1,105 @@
- const express = require("express");
+const express = require("express");
 const line = require("@line/bot-sdk");
 const OpenAI = require("openai");
 
 const app = express();
 
-const config = {
-  channelSecret: process.env.LINE_CHANNEL_SECRET,
+const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
 
-const client = new line.Client(config);
+const client = new line.Client(lineConfig);
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-app.get("/", (req, res) => {
-  res.send("うまデータちゃん LINE AI is running!");
-});
-
-app.post("/webhook", line.middleware(config), async (req, res) => {
-  try {
-    await Promise.all(req.body.events.map(handleEvent));
-    res.status(200).end();
-  } catch (err) {
-    console.error(err);
-    res.status(500).end();
-  }
+app.post("/webhook", line.middleware(lineConfig), async (req, res) => {
+  Promise.all(req.body.events.map(handleEvent))
+    .then((result) => res.json(result))
+    .catch((err) => {
+      console.error("Webhook error:", err);
+      res.status(500).end();
+    });
 });
 
 async function handleEvent(event) {
   if (event.type !== "message" || event.message.type !== "text") {
-    return null;
+    return Promise.resolve(null);
   }
 
-  const userMessage = event.message.text;
+  const userMessage = event.message.text.trim();
 
-  const aiReply = await getUmaDataReply(userMessage);
+  if (userMessage === "テスト") {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "うまデータちゃん起動中です🐴\nLINEとRenderの接続は成功しています。",
+    });
+  }
 
-  return client.replyMessage(event.replyToken, {
-    type: "text",
-    text: aiReply,
-  });
-}
+  const allowedMessages = [
+    "今日の重賞",
+    "今週の重賞",
+    "明日の重賞",
+    "予想",
+    "競馬予想",
+  ];
 
-async function getUmaDataReply(userMessage) {
+  const shouldUseAI = allowedMessages.some((word) =>
+    userMessage.includes(word)
+  );
+
+  if (!shouldUseAI) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text:
+        "うまデータちゃんです🐴\n\n使える言葉はこちらです。\n・テスト\n・今日の重賞\n・今週の重賞\n・明日の重賞\n・予想\n\n※この返信ではAIを使っていないので、API料金はほぼ減りません。",
+    });
+  }
+
   try {
-    const response = await openai.chat.completions.create({
+    const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         {
           role: "system",
           content:
-            "あなたはLINE競馬AI『うまデータちゃん』です。JRA平地レースを中心に、ユーザーの質問に日本語でわかりやすく答えてください。馬券の購入を強く勧めず、予想は参考情報として扱ってください。今日の重賞、今週の重賞、レース予想、印、買い目候補などを聞かれたら、分かる範囲で丁寧に回答してください。確認できない情報は不明と書いてください。",
+            "あなたはLINE競馬AI「うまデータちゃん」です。JRA平地レースを中心に、やさしく分かりやすく競馬予想を返答してください。的中や利益は保証せず、無理な購入はすすめないでください。返答は長くしすぎず、LINEで読みやすくしてください。",
         },
         {
           role: "user",
           content: userMessage,
         },
       ],
-      max_tokens: 800,
+      max_tokens: 700,
+      temperature: 0.7,
     });
 
-    return response.choices[0].message.content;
+    const aiText =
+      completion.choices[0]?.message?.content ||
+      "ごめんなさい。うまく返答を作れませんでした。";
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: aiText,
+    });
   } catch (error) {
-    console.error(error);
-    return "ごめんなさい。今は予想AIの返答でエラーが出ています。少し待ってからもう一度送ってください。";
+    console.error("OpenAI error:", error);
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text:
+        "ごめんなさい。今は予想AIの返答でエラーが出ています。\nOpenAI APIの課金・残高・利用上限を確認してください。",
+    });
   }
 }
 
-const PORT = process.env.PORT || 3000;
+app.get("/", (req, res) => {
+  res.send("うまデータちゃん LINE bot is running.");
+});
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });
