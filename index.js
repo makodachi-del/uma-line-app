@@ -1,6 +1,6 @@
 const express = require("express");
 const line = require("@line/bot-sdk");
-const OpenAI = require("openai");
+const { OpenAI } = require("openai");
 
 const app = express();
 
