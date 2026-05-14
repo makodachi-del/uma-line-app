@@ -18,6 +18,44 @@ const openai = new OpenAI({
 const PORT = process.env.PORT || 3000;
 
 // ==============================
+// 日付・返信整形
+// ==============================
+function getTodayJstText() {
+  return new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  }).format(new Date());
+}
+
+function getNowJstIsoText() {
+  return new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    weekday: "short",
+  }).format(new Date());
+}
+
+function cleanLineReply(text) {
+  return String(text || "")
+    .replace(/\*\*/g, "")
+    .replace(/#{1,6}\s?/g, "")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/【\d+:\d+†[^】]+】/g, "")
+    .replace(/]+/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+// ==============================
 // うまデータちゃん本体ルール
 // ==============================
 const UMA_SYSTEM_PROMPT = `
@@ -36,11 +74,20 @@ JRA平地レース専用の競馬予想AIです。
 ・的中や利益は保証しません。
 ・馬券購入を強くすすめてはいけません。
 
+【日付判断ルール】
+・ユーザーの「今日」「明日」「昨日」「今週」「来週」「先週」は、必ずユーザー入力に添付された日本時間の現在日付を基準に判断します。
+・現在日付と違う古い年度の重賞一覧を出してはいけません。
+・ユーザーが年を指定していない場合は、現在日付の年を基準にします。
+・ユーザーが「2026年1月」のように年月を指定した場合だけ、その指定年月を対象にします。
+・日付が確認できない場合は「確認できた範囲では不明」と書きます。
+
 【対象】
 ・原則JRA平地の特別競走・重賞のみ対象です。
 ・新馬、未勝利、一般平場、障害、地方、海外は対象外です。
 ・ユーザーが明示した場合のみ例外として補助します。
 ・完成済み馬柱が確認できるレースのみ本格予想します。
+・重賞一覧でも、障害重賞は対象外です。
+・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど障害レースは表示しません。
 
 【7人の予想師】
 A 展開：
@@ -94,9 +141,17 @@ A〜Fを必ず連携・照合し、最終印、危険馬、消し馬、予想着
 不良馬場：道悪適性を優先。C/A/F重視。
 
 【出力ルール】
-LINEなので長すぎず、必要な情報を分かりやすく返します。
-レース一覧は表ではなく、LINEで読みやすい番号付きリストを基本にします。
-予想時は、情報が揃っている場合だけ以下を出します。
+・LINEなので長すぎず、必要な情報を分かりやすく返します。
+・Markdown記法は使いません。
+・太字記号、見出し記号、URL、出典リンクは本文に出しません。
+・レース一覧は表ではなく、LINEで読みやすい番号付きリストを基本にします。
+・表は使わず、短い段落で返します。
+・出走時間が確認できる場合は書きます。
+・確認できない場合は「不明」と書きます。
+・障害レースは一覧に入れません。
+
+【予想時の出力】
+情報が揃っている場合だけ以下を出します。
 
 ■ レース
 競馬場R レース名 / 発走時刻 / 条件
@@ -132,27 +187,14 @@ G 統合：
 ・取得できない情報は「不明」と書きます。
 ・検索結果が古い、曖昧、複数で矛盾する場合は断定しません。
 ・レース情報と馬柱情報が十分に確認できない場合は、本格予想をせず、確認できた範囲だけ返します。
+・今日、今週、来週、先週の重賞を聞かれた場合は、必ず現在日付を基準にJRA平地重賞だけを確認します。
+・古い年度の重賞一覧を誤って返してはいけません。
+・ユーザーが月指定した場合は、その年月のJRA平地の特別競走以上を確認できる範囲で返します。
 
-LINE返信ルール：
-・LINEではMarkdown記法を使わない。
-・**太字**、###、[]()形式のリンクは使わない。
-・URLは原則として表示しない。
-・出典リンクを本文に貼らない。
-・返信はLINEで読みやすい短めの文章にする。
-・表は使わず、番号付きリストまたは短い段落で出す。
-
-レース対象ルール：
-・対象はJRA平地レースのみ。
-・障害レースは対象外。
-・新馬、未勝利、障害、地方、海外は対象外。
-・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど障害レースは重賞一覧に入れない。
-・取得できない情報は「不明」と書く。
-・確認できない内容は作らない。
-
-予想ルール：
-・人気、オッズ、払戻、結果は予想印や勝負度に使わない。
-・買い目は単勝、複勝、ワイド、三連複のみ。
-・馬連、枠連、馬単、三連単は出さない。
+【買い目ルール】
+・人気、オッズ、払戻、結果は予想印や勝負度に使いません。
+・買い目は単勝、複勝、ワイド、三連複のみです。
+・馬連、枠連、馬単、三連単は出しません。
 `;
 
 // ==============================
@@ -241,6 +283,24 @@ function getNotTargetReply() {
 // Web検索つきOpenAI呼び出し
 // ==============================
 async function callUmaDataChanWithWeb(userText) {
+  const todayJstText = getTodayJstText();
+  const nowJstText = getNowJstIsoText();
+
+  const aiUserInput = [
+    `現在日付は日本時間で ${todayJstText} です。`,
+    `現在時刻は日本時間で ${nowJstText} です。`,
+    "",
+    "ユーザーの「今日」「明日」「昨日」「今週」「来週」「先週」は、必ず上の日本時間を基準に判断してください。",
+    "ユーザーが年を指定していない場合は、現在日付の年を基準にしてください。",
+    "現在日付と無関係な古い年度の重賞一覧を返してはいけません。",
+    "対象はJRA平地レースのみです。障害レース、地方、海外、新馬、未勝利、一般平場は対象外です。",
+    "LINE返信なのでMarkdown記法、URL、出典リンクは使わないでください。",
+    "確認できない情報は作らず、不明と書いてください。",
+    "",
+    "ユーザーのLINEメッセージ：",
+    userText
+  ].join("\n");
+
   const response = await openai.responses.create({
     model: process.env.OPENAI_MODEL || "gpt-4o-mini",
     tools: [
@@ -255,20 +315,13 @@ async function callUmaDataChanWithWeb(userText) {
       },
       {
         role: "user",
-        content: [
-          "ユーザーのLINEメッセージ：",
-          userText,
-          "",
-          "必要ならWeb検索して、日本語のJRA競馬情報を確認してください。",
-          "ただし、確認できない情報は作らないでください。",
-          "LINEで読みやすく短めに返してください。"
-        ].join("\n"),
+        content: aiUserInput,
       },
     ],
     max_output_tokens: 1800,
   });
 
-  return response.output_text || "返答を作れませんでした。";
+  return cleanLineReply(response.output_text || "返答を作れませんでした。");
 }
 
 // ==============================
@@ -298,7 +351,7 @@ async function handleEvent(event) {
   if (fixedReply) {
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: fixedReply,
+      text: cleanLineReply(fixedReply),
     });
   }
 
@@ -359,7 +412,7 @@ async function handleEvent(event) {
 
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: errorMessage,
+      text: cleanLineReply(errorMessage),
     });
   }
 }
