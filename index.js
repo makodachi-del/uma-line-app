@@ -64,6 +64,95 @@ function cleanLineReply(text) {
 }
 
 // ==============================
+// 保存タイプ判定
+// ==============================
+function getHistoryType(userText) {
+  const text = String(userText || "");
+
+  if (text.includes("保存テスト")) {
+    return "保存テスト";
+  }
+
+  if (
+    text.includes("結果") ||
+    text.includes("払戻") ||
+    text.includes("着順")
+  ) {
+    return "結果";
+  }
+
+  if (
+    text.includes("検証") ||
+    text.includes("集計") ||
+    text.includes("成績") ||
+    text.includes("反省")
+  ) {
+    return "検証";
+  }
+
+  if (
+    text.includes("予想") ||
+    text.includes("馬柱") ||
+    text.includes("出馬表") ||
+    text.includes("出走馬")
+  ) {
+    return "予想";
+  }
+
+  if (
+    text.includes("重賞") ||
+    text.includes("特別") ||
+    text.includes("未勝利") ||
+    text.includes("レース")
+  ) {
+    return "一覧";
+  }
+
+  return "その他";
+}
+
+// ==============================
+// Googleスプレッドシート保存
+// ==============================
+async function saveUmaHistory({ type, userText, aiReply, memo }) {
+  const url = process.env.GOOGLE_SHEET_WEBHOOK_URL;
+
+  if (!url) {
+    console.log("GOOGLE_SHEET_WEBHOOK_URL is not set.");
+    return;
+  }
+
+  try {
+    const payload = {
+      type: type || "",
+      userText: userText || "",
+      aiReply: aiReply || "",
+      targetDate: getTodayJstText(),
+      racecourse: "",
+      raceName: "",
+      marks: "",
+      bets: "",
+      result: "",
+      hit: "",
+      memo: memo || ""
+    };
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const text = await response.text();
+    console.log("Google Sheet save response:", text);
+  } catch (err) {
+    console.error("Google Sheet save error:", err);
+  }
+}
+
+// ==============================
 // JRA開催なし判定
 // ==============================
 function getNoJraTodayReplyIfNeeded(userText) {
@@ -97,8 +186,6 @@ function getNoJraTodayReplyIfNeeded(userText) {
 
   const weekday = getJstWeekdayShort();
 
-  // JRA中央競馬は基本的に土日開催。
-  // 火〜金は原則としてJRA開催がないため、地方競馬を拾わないように固定返信する。
   const noJraWeekdays = ["火", "水", "木", "金"];
 
   if (!noJraWeekdays.includes(weekday)) {
@@ -190,6 +277,19 @@ JRA平地レース専用の競馬予想AIです。
 ・馬柱で近走3走以上を確認できない場合は、本格予想をしません。
 ・新馬戦は対象外です。
 ・過去走が少ない馬ばかりで比較できない場合は「本格予想不可」と返します。
+
+【結果確認】
+・ユーザーが「結果」と聞いた場合は、予想ではなくレース結果を確認します。
+・レース終了前の場合は「まだ結果は確認できません」と返します。
+・結果は、着順、払戻、単勝、複勝、ワイド、三連複を確認できる範囲で返します。
+・確認できない情報は「不明」と書きます。
+・結果確認でも、地方、海外、障害、新馬は対象外です。
+
+【検証】
+・ユーザーが「検証」「成績」「集計」「反省」と聞いた場合は、過去の予想と実際の結果を照合します。
+・保存データが確認できない場合は「保存された過去予想が確認できないため、完全な検証はできません」と返します。
+・予想内容がユーザー入力または保存データから確認できる場合だけ、印、買い目候補、実際の着順、的中、不的中、原因、改善点を整理します。
+・結果や払戻を、未来の予想印や勝負度には使いません。
 
 【本格予想の条件】
 ・馬柱、出馬表、枠順、馬番、騎手、斤量、調教師、近走3走以上が確認できる場合だけ本格予想します。
@@ -309,6 +409,11 @@ G 統合：
 ・古い年度の重賞一覧を誤って返してはいけません。
 ・ユーザーが月指定した場合は、その年月を対象に確認できる範囲で返します。
 
+【保存・集計】
+・予想、結果、検証、一覧の返信内容は、アプリ側で保存される前提です。
+・保存された内容を使って、あとで成績集計や反省に使います。
+・ただし、保存データを直接参照できない場合は、確認できる範囲だけで返します。
+
 【買い目ルール】
 ・人気、オッズ、払戻、結果は予想印や勝負度に使いません。
 ・買い目は単勝、複勝、ワイド、三連複のみです。
@@ -339,6 +444,7 @@ function getFixedReply(userText) {
       "",
       "使える言葉：",
       "・テスト",
+      "・保存テスト",
       "・今日の重賞",
       "・今週の重賞",
       "・来週の重賞",
@@ -348,6 +454,9 @@ function getFixedReply(userText) {
       "・今週の特別",
       "・今日の未勝利",
       "・レース名＋予想",
+      "・レース名＋結果",
+      "・検証",
+      "・集計",
       "",
       "対象：",
       "・JRA平地レースのみ",
@@ -385,8 +494,12 @@ function shouldUseWebSearch(userText) {
     "出走表",
     "出走馬",
     "結果",
+    "払戻",
+    "着順",
     "集計",
     "検証",
+    "成績",
+    "反省",
     "レース"
   ];
 
@@ -405,6 +518,7 @@ function getNotTargetReply() {
     "「今日の特別」",
     "「今日の未勝利」",
     "「レース名＋予想」",
+    "「レース名＋結果」",
     "のように送ってください。"
   ].join("\n");
 }
@@ -434,6 +548,8 @@ async function callUmaDataChanWithWeb(userText) {
     "・ユーザーが「特別以上」と聞いた場合は、JRA平地の特別競走、オープン特別、リステッド、重賞を対象にする。",
     "・ユーザーが「特別」と聞いた場合は、JRA平地の特別競走のみ。重賞は混ぜない。",
     "・ユーザーが「未勝利」と聞いた場合は、JRA平地の未勝利戦のみ。過去走3走以上が確認できる場合だけ本格予想する。",
+    "・ユーザーが「結果」と聞いた場合は、予想ではなく結果を確認する。",
+    "・ユーザーが「検証」「集計」「成績」「反省」と聞いた場合は、確認できる予想内容と結果だけで検証する。",
     "・障害、地方、海外、新馬は常に対象外。",
     "・川崎競馬場、浦和競馬場、大井競馬場、船橋競馬場、園田競馬場、高知競馬場、佐賀競馬場、名古屋競馬場、笠松競馬場、門別競馬場、金沢競馬場、水沢競馬場、盛岡競馬場など地方競馬は絶対に表示しない。",
     "・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど障害レースは絶対に表示しない。",
@@ -491,6 +607,25 @@ async function handleEvent(event) {
 
   const userText = event.message.text || "";
 
+  if (userText.trim() === "保存テスト") {
+    const reply = [
+      "保存テストを実行しました🐴",
+      "Googleスプレッドシートに1行追加されていれば成功です。"
+    ].join("\n");
+
+    await saveUmaHistory({
+      type: "保存テスト",
+      userText,
+      aiReply: reply,
+      memo: "保存接続テスト"
+    });
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: cleanLineReply(reply),
+    });
+  }
+
   const fixedReply = getFixedReply(userText);
   if (fixedReply) {
     return client.replyMessage(event.replyToken, {
@@ -501,9 +636,18 @@ async function handleEvent(event) {
 
   const noJraTodayReply = getNoJraTodayReplyIfNeeded(userText);
   if (noJraTodayReply) {
+    const cleanedReply = cleanLineReply(noJraTodayReply);
+
+    await saveUmaHistory({
+      type: "対象なし",
+      userText,
+      aiReply: cleanedReply,
+      memo: "JRA開催なし固定返信"
+    });
+
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: cleanLineReply(noJraTodayReply),
+      text: cleanedReply,
     });
   }
 
@@ -516,6 +660,14 @@ async function handleEvent(event) {
 
   try {
     const aiReply = await callUmaDataChanWithWeb(userText);
+    const historyType = getHistoryType(userText);
+
+    await saveUmaHistory({
+      type: historyType,
+      userText,
+      aiReply,
+      memo: "LINE返信自動保存"
+    });
 
     return client.replyMessage(event.replyToken, {
       type: "text",
