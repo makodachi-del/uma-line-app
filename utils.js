@@ -1,66 +1,75 @@
-function getNowJstIsoText() {
-  const now = new Date();
-  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  return jst.toISOString().replace('Z', '+09:00');
+const MAX_LINE_MESSAGE = 4500;
+
+function nowJstDate() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
 }
 
-function getTodayJstDateKey() {
-  const now = new Date();
-  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  return jst.toISOString().slice(0, 10);
+function getNowJstIsoText() {
+  const d = nowJstDate();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}+09:00`;
+}
+
+function getTodayJstYmd() {
+  const d = nowJstDate();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
 }
 
 function getTodayJstText() {
-  const d = getTodayJstDateKey();
-  return `${d} JST`;
+  const d = nowJstDate();
+  const days = ['日','月','火','水','木','金','土'];
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}年${pad(d.getMonth()+1)}月${pad(d.getDate())}日(${days[d.getDay()]})`;
 }
 
-function yyyymmdd(dateKey = getTodayJstDateKey()) {
-  return dateKey.replaceAll('-', '');
+function isTueToFriNoJraDay() {
+  const day = nowJstDate().getDay();
+  return day >= 2 && day <= 5;
+}
+
+function hasTodayHorseWords(text) {
+  return /(今日|本日).*(重賞|特別|未勝利|競馬|レース|予想)|^(今日|本日)$/.test(text || '');
 }
 
 function cleanLineReply(text) {
   return String(text || '')
     .replace(/\*\*/g, '')
-    .replace(/__([^_]+)__/g, '$1')
     .replace(/```[\s\S]*?```/g, (m) => m.replace(/```/g, ''))
-    .trim()
-    .slice(0, 4800);
+    .replace(/\r\n/g, '\n')
+    .trim();
+}
+
+function splitForLine(text) {
+  const cleaned = cleanLineReply(text);
+  if (cleaned.length <= MAX_LINE_MESSAGE) return [cleaned || '不明'];
+  const parts = [];
+  let rest = cleaned;
+  while (rest.length > MAX_LINE_MESSAGE) {
+    let cut = rest.lastIndexOf('\n', MAX_LINE_MESSAGE);
+    if (cut < 1000) cut = MAX_LINE_MESSAGE;
+    parts.push(rest.slice(0, cut));
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) parts.push(rest);
+  return parts.slice(0, 5);
 }
 
 function normalizeText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
-function isTuesdayToFridayJst() {
-  const now = new Date();
-  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  const day = jst.getUTCDay();
-  return day >= 2 && day <= 5;
-}
-
-function getNoJraTodayReplyIfNeeded(userText) {
-  const t = String(userText || '');
-  const hasToday = /今日|本日/.test(t);
-  const hasKeiba = /競馬|重賞|特別|未勝利|予想|結果|レース/.test(t);
-  if (isTuesdayToFridayJst() && hasToday && hasKeiba) {
-    return '今日は原則JRA開催日ではありません。JRA開催が確認できる土日・祝日開催日、または「今週の重賞」「来週の重賞」のように送ってください。';
-  }
-  return null;
-}
-
-function splitNumbers(text) {
-  const m = String(text || '').match(/\d+/g) || [];
-  return m.map(Number).filter((n) => Number.isFinite(n));
-}
+function yen(n) { return `${n}円`; }
 
 module.exports = {
+  nowJstDate,
   getNowJstIsoText,
-  getTodayJstDateKey,
+  getTodayJstYmd,
   getTodayJstText,
-  yyyymmdd,
+  isTueToFriNoJraDay,
+  hasTodayHorseWords,
   cleanLineReply,
+  splitForLine,
   normalizeText,
-  getNoJraTodayReplyIfNeeded,
-  splitNumbers
+  yen,
 };
