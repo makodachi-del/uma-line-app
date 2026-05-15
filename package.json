@@ -1,14 +1,13 @@
 {
   "name": "uma-line-app",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "@line/bot-sdk": "^9.5.0",
-    "cheerio": "^1.0.0",
+    "cheerio": "1.0.0-rc.12",
     "express": "^4.19.2",
     "openai": "^4.104.0"
   },
