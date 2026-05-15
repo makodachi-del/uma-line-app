@@ -63,21 +63,49 @@ function cleanLineReply(text) {
 }
 
 // ==============================
-// 重賞返信の最終フィルター
+// 重賞専用判定
 // ==============================
-function filterHeavyRaceReplyIfNeeded(userText, replyText) {
+function isHeavyRaceOnlyRequest(userText) {
   const text = String(userText || "");
-  let reply = String(replyText || "");
-
-  const isHeavyRaceRequest =
+  return (
     text.includes("重賞") &&
     !text.includes("特別以上") &&
     !text.includes("特別") &&
-    !text.includes("未勝利");
+    !text.includes("未勝利")
+  );
+}
 
-  if (!isHeavyRaceRequest) {
-    return reply;
+// ==============================
+// 重賞JSON抽出
+// ==============================
+function extractJsonArray(text) {
+  const raw = String(text || "")
+    .replace(/```json/g, "")
+    .replace(/```/g, "")
+    .trim();
+
+  const start = raw.indexOf("[");
+  const end = raw.lastIndexOf("]");
+
+  if (start === -1 || end === -1 || end <= start) {
+    return [];
   }
+
+  try {
+    const jsonText = raw.slice(start, end + 1);
+    const parsed = JSON.parse(jsonText);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.error("JSON parse error:", err);
+    return [];
+  }
+}
+
+// ==============================
+// 重賞一覧フォーマット
+// ==============================
+function formatHeavyRaceList(races, userText) {
+  const today = getTodayJstText();
 
   const bannedWords = [
     "ジャンプ",
@@ -98,51 +126,115 @@ function filterHeavyRaceReplyIfNeeded(userText, replyText) {
     "六社ステークス"
   ];
 
-  const lines = reply.split("\n");
-  const keptLines = [];
-  let skipNextVenueLine = false;
+  const allowedGrades = [
+    "GI",
+    "GII",
+    "GIII",
+    "G1",
+    "G2",
+    "G3",
+    "ＧⅠ",
+    "ＧⅡ",
+    "ＧⅢ",
+    "Ｇ１",
+    "Ｇ２",
+    "Ｇ３"
+  ];
 
-  for (const line of lines) {
-    const lineText = String(line || "");
-    const isBanned = bannedWords.some((word) => lineText.includes(word));
+  const cleaned = [];
 
-    if (isBanned) {
-      skipNextVenueLine = true;
+  for (const r of races) {
+    const raceName = String(r.raceName || "").trim();
+    const grade = String(r.grade || "").trim();
+    const raceType = String(r.raceType || "").trim();
+
+    const allText = [
+      raceName,
+      grade,
+      raceType,
+      r.racecourse,
+      r.course,
+      r.memo
+    ].join(" ");
+
+    const isBanned = bannedWords.some((word) => allText.includes(word));
+    if (isBanned) continue;
+
+    const hasAllowedGrade = allowedGrades.some((g) => grade.includes(g));
+    if (!hasAllowedGrade) continue;
+
+    if (grade.includes("J-") || grade.includes("J・") || grade.includes("JG")) {
       continue;
     }
 
-    if (
-      skipNextVenueLine &&
-      (
-        lineText.includes("競馬場") ||
-        lineText.includes("発走") ||
-        lineText.includes("R ") ||
-        lineText.includes("R　")
-      )
-    ) {
-      skipNextVenueLine = false;
+    if (raceType && !raceType.includes("平地")) {
       continue;
     }
 
-    skipNextVenueLine = false;
-    keptLines.push(line);
+    if (!raceName) continue;
+
+    cleaned.push({
+      date: String(r.date || "日付不明").trim(),
+      racecourse: String(r.racecourse || "競馬場不明").trim(),
+      raceNo: String(r.raceNo || "R不明").trim(),
+      raceName,
+      grade,
+      startTime: String(r.startTime || "不明").trim(),
+      course: String(r.course || "条件不明").trim(),
+    });
   }
 
-  reply = keptLines.join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  if (!reply || reply.length < 20) {
+  if (cleaned.length === 0) {
     return [
-      "確認できた範囲では、今週のJRA平地重賞は不明です。",
+      "今週のJRA平地重賞🐴",
+      `${today} 時点`,
       "",
-      "障害重賞、特別競走、地方競馬は対象外として除外しました。",
+      "確認できた範囲では、対象レースは不明です。",
       "",
-      "JRA平地のG1、G2、G3だけを対象にしています。"
+      "除外済み：",
+      "・障害重賞",
+      "・特別競走",
+      "・地方競馬",
+      "・海外競馬",
+      "",
+      "対象はJRA平地のG1・G2・G3のみです。"
     ].join("\n");
   }
 
-  return reply;
+  const grouped = {};
+  for (const r of cleaned) {
+    if (!grouped[r.date]) grouped[r.date] = [];
+    grouped[r.date].push(r);
+  }
+
+  const lines = [];
+  lines.push("今週のJRA平地重賞🐴");
+  lines.push(`${today} 時点`);
+  lines.push("");
+
+  let number = 1;
+
+  for (const date of Object.keys(grouped)) {
+    lines.push(`【${date}】`);
+    lines.push("");
+
+    for (const r of grouped[date]) {
+      lines.push(`${number}. ${r.raceName}（${r.grade}）`);
+      lines.push(`${r.racecourse}${r.raceNo}`);
+      lines.push(`発走：${r.startTime}`);
+      lines.push(`条件：${r.course}`);
+      lines.push("");
+      number++;
+    }
+  }
+
+  lines.push("除外済み：");
+  lines.push("・障害重賞");
+  lines.push("・特別競走");
+  lines.push("・地方競馬");
+  lines.push("・海外競馬");
+
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // ==============================
@@ -151,9 +243,7 @@ function filterHeavyRaceReplyIfNeeded(userText, replyText) {
 function getHistoryType(userText) {
   const text = String(userText || "");
 
-  if (text.includes("保存テスト")) {
-    return "保存テスト";
-  }
+  if (text.includes("保存テスト")) return "保存テスト";
 
   if (
     text.includes("結果") ||
@@ -244,9 +334,7 @@ function getNoJraTodayReplyIfNeeded(userText) {
     text.includes("今日") ||
     text.includes("本日");
 
-  if (!isTodayRequest) {
-    return null;
-  }
+  if (!isTodayRequest) return null;
 
   const isRaceQuestion = [
     "重賞",
@@ -262,16 +350,12 @@ function getNoJraTodayReplyIfNeeded(userText) {
     "払戻"
   ].some((word) => text.includes(word));
 
-  if (!isRaceQuestion) {
-    return null;
-  }
+  if (!isRaceQuestion) return null;
 
   const weekday = getJstWeekdayShort();
   const noJraWeekdays = ["火", "水", "木", "金"];
 
-  if (!noJraWeekdays.includes(weekday)) {
-    return null;
-  }
+  if (!noJraWeekdays.includes(weekday)) return null;
 
   const today = getTodayJstText();
 
@@ -318,190 +402,53 @@ JRA平地レース専用の競馬予想AIです。
 ・馬券購入を強くすすめてはいけません。
 
 【日付判断ルール】
-・ユーザーの「今日」「明日」「昨日」「今週」「来週」「先週」は、必ずユーザー入力に添付された日本時間の現在日付を基準に判断します。
+・ユーザーの「今日」「明日」「昨日」「今週」「来週」「先週」は、日本時間の現在日付を基準に判断します。
 ・現在日付と違う古い年度の重賞一覧を出してはいけません。
 ・ユーザーが年を指定していない場合は、現在日付の年を基準にします。
-・ユーザーが「2026年1月」のように年月を指定した場合だけ、その指定年月を対象にします。
-・日付が確認できない場合は「確認できた範囲では不明」と書きます。
-・「今日」と聞かれた場合は、最初にJRA中央競馬の開催日か確認します。
+・日付が確認できない場合は「不明」と書きます。
 ・JRA開催日でない場合は、地方競馬や海外競馬を代わりに出してはいけません。
 
 【対象】
-・ユーザーが聞ける対象は、重賞、特別以上、特別、未勝利です。
-・すべてJRA平地レースのみ対象です。
+・対象はJRA平地レースのみです。
 ・障害、地方、海外、新馬は対象外です。
-・川崎競馬場、浦和競馬場、大井競馬場、船橋競馬場、園田競馬場、高知競馬場、佐賀競馬場、名古屋競馬場、笠松競馬場、門別競馬場、金沢競馬場、水沢競馬場、盛岡競馬場などの地方競馬は絶対に表示しません。
-・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど障害レースは表示しません。
+・地方競馬は絶対に表示しません。
 
 【重賞】
-・ユーザーが「重賞」と聞いた場合は、JRA平地重賞のみ返します。
-・対象はG1、G2、G3、GI、GII、GIIIのみです。
-・J-GI、J-GII、J-GIIIは障害重賞なので対象外です。
-・障害重賞は対象外です。
+・重賞はJRA平地重賞のみです。
+・G1、G2、G3、GI、GII、GIIIのみです。
+・J-GI、J-GII、J-GIIIは障害重賞なので除外します。
 ・特別競走、オープン特別、リステッド、未勝利は混ぜません。
-・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど、障害重賞は重賞として扱いません。
-・検索結果に障害レースが含まれていても、必ず除外して返信します。
-・六社ステークス、栗東ステークス、弥彦ステークスなどの特別競走を、重賞一覧に混ぜてはいけません。
-・「ステークス」という名前だけで重賞扱いしてはいけません。
-・グレード表記が確認できないレースは、重賞一覧に入れず「不明」とします。
+・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど障害レースは表示しません。
+・栗東ステークス、弥彦ステークス、六社ステークスなどの特別競走を重賞一覧に入れてはいけません。
+・ステークスという名前だけで重賞扱いしてはいけません。
 
 【特別以上】
-・ユーザーが「特別以上」と聞いた場合は、JRA平地の特別競走、オープン特別、リステッド、重賞を対象にします。
+・特別以上は、JRA平地の特別競走、オープン特別、リステッド、重賞を対象にします。
 ・障害、新馬、未勝利、地方、海外は対象外です。
 
 【特別】
-・ユーザーが「特別」と聞いた場合は、JRA平地の特別競走を対象にします。
-・重賞を含めるのは、ユーザーが「特別以上」と言った場合だけです。
-・障害、新馬、未勝利、地方、海外は対象外です。
-・ユーザーが「重賞」と聞いた場合に、六社ステークス、栗東ステークス、弥彦ステークスなどの特別競走を混ぜてはいけません。
+・特別は、JRA平地の特別競走のみです。
+・重賞を含めるのは「特別以上」と言われた時だけです。
 
 【未勝利】
-・ユーザーが「未勝利」と聞いた場合は、JRA平地の未勝利戦のみ対象にします。
-・ただし、過去走3走以上が確認できる馬がいる未勝利戦だけ対象にします。
-・馬柱で近走3走以上を確認できない場合は、本格予想をしません。
+・未勝利は、JRA平地の未勝利戦のみです。
+・過去走3走以上が確認できる馬がいる未勝利戦だけ対象です。
 ・新馬戦は対象外です。
-・過去走が少ない馬ばかりで比較できない場合は「本格予想不可」と返します。
 
 【結果確認】
-・ユーザーが「結果」と聞いた場合は、予想ではなくレース結果を確認します。
-・レース終了前の場合は「まだ結果は確認できません」と返します。
 ・結果は、着順、払戻、単勝、複勝、ワイド、三連複を確認できる範囲で返します。
 ・確認できない情報は「不明」と書きます。
-・結果確認でも、地方、海外、障害、新馬は対象外です。
 
 【検証】
-・ユーザーが「検証」「成績」「集計」「反省」と聞いた場合は、過去の予想と実際の結果を照合します。
 ・保存データが確認できない場合は「保存された過去予想が確認できないため、完全な検証はできません」と返します。
-・予想内容がユーザー入力または保存データから確認できる場合だけ、印、買い目候補、実際の着順、的中、不的中、原因、改善点を整理します。
-・結果や払戻を、未来の予想印や勝負度には使いません。
-
-【本格予想の条件】
-・馬柱、出馬表、枠順、馬番、騎手、斤量、調教師、近走3走以上が確認できる場合だけ本格予想します。
-・確認できない情報は「不明」と書きます。
-・確認できない内容は作りません。
-・人気、オッズ、払戻、結果は予想印や勝負度に使いません。
-・買い目は単勝、複勝、ワイド、三連複のみです。
-・馬連、枠連、馬単、三連単は出しません。
-
-【7人の予想師】
-A 展開：
-逃げ、先行、好位差し、中団加速、外差し持続、追込、通過順、ペース、隊列、枠順、脚質利を見る。
-
-B 能力：
-近走3〜5走、着順、着差、相手関係、上がり、クラス実績、重賞実績、走破内容を見る。
-
-C 条件：
-距離、競馬場、右左回り、坂、直線長、内外回り、小回り、馬場、血統を見る。
-
-D 人馬：
-騎手、乗り替わり、継続騎乗、斤量、厩舎、調教師、ローテ、休み明け、状態を見る。
-D単独で印を押し上げすぎない。
-
-E 妙味：
-人気・オッズを使わず、不利、展開不向き、条件替わり、外々ロス、直線詰まり、出遅れ、前走敗因明確などを見る。
-
-F 軸：
-安定感、今回条件での再現性、崩れにくさ、位置取り、自在性、気性、出遅れ癖、展開依存度を見る。
-
-G 統合：
-A〜Fを必ず連携・照合し、最終印、危険馬、消し馬、予想着順、勝負度、買い対象を決める。
-単純多数決は禁止。
-
-【競馬場別の重視】
-札幌：洋芝、先行力、持続力、パワー。A/C/F重視。
-函館：洋芝、小回り、先行力、持続力。A/C/F重視。
-福島：小回り、早め進出、持続力。A/C/E重視。
-新潟外回り芝：長い直線、瞬発力、左回り。B/C/F重視。
-新潟内回り芝：先行力、コーナー性能、持続力。A/C/F重視。
-東京：長い直線、左回り、総合能力。B/C/F重視。極端な展開ではAも反映。
-中山：小回り、急坂、立ち回り、先行力。A/C/D重視。
-中京：左回り、長い直線、坂、持続力。B/C/F重視。
-京都外回り芝：下り坂加速、瞬発力、外回り適性。B/C/F重視。
-京都内回り芝：先行力、器用さ、早め進出。A/C/F重視。
-阪神外回り芝：瞬発力、坂適性、長く脚を使う能力。B/C/D重視。
-阪神内回り芝：先行力、コーナー性能、坂適性。A/C/F重視。
-小倉：小回り、直線短い、先行力、機動力。A/C/E重視。
-
-【距離別の重視】
-短距離：スタート、二の脚、先行力、スピード持続力。A/C/F重視。
-マイル：スピード、折り合い、持続力、瞬発力のバランス。B/C/A重視。
-中距離：能力、折り合い、コース適性、持続力、自在性。B/C/F重視。
-長距離：スタミナ、折り合い、騎手、ローテ、気性。C/D/F重視。
-
-【馬場別の重視】
-良馬場：能力、瞬発力、コース適性、安定感。B/C/F重視。
-稍重：パワー、持続力、道悪適性、状態。C/A/D重視。
-重馬場：道悪適性、パワー、持続力。C/A/D重視。
-不良馬場：道悪適性を優先。C/A/F重視。
 
 【出力ルール】
-・LINEなので長すぎず、必要な情報を分かりやすく返します。
-・Markdown記法は使いません。
-・太字記号、見出し記号、URL、出典リンクは本文に出しません。
-・レース一覧は表ではなく、LINEで読みやすい番号付きリストを基本にします。
-・表は使わず、短い段落で返します。
-・出走時間が確認できる場合は書きます。
-・確認できない場合は「不明」と書きます。
-・障害レースは一覧に入れません。
-・地方競馬は一覧に入れません。
-
-【予想時の出力】
-情報が揃っている場合だけ以下を出します。
-
-■ レース
-競馬場R レース名 / 発走時刻 / 条件
-
-■ 前提確認
-馬柱：
-馬場：
-オッズ：
-オッズの扱い：予想印・予想着順・勝負度には不使用。買い目と資金配分のみ使用。
-
-■ 最終予想
-勝負度：
-G最終印：
-予想着順：
-危険馬：
-消し馬：
-
-■ 短評
-A 展開：
-B 能力：
-C 条件：
-D 人馬：
-E 妙味：
-F 軸：
-G 統合：
-
-■ 買い目候補
-500円以内：
-1000円以内：
-
-【Web検索時のルール】
-・JRA公式、日本語の競馬情報サイト、信頼できる競馬情報を優先します。
-・取得できない情報は「不明」と書きます。
-・検索結果が古い、曖昧、複数で矛盾する場合は断定しません。
-・レース情報と馬柱情報が十分に確認できない場合は、本格予想をせず、確認できた範囲だけ返します。
-・今日のレースを聞かれた場合は、最初にJRA中央競馬の開催有無を確認します。
-・JRA開催日でない場合は「本日はJRA開催がありません」と返します。
-・JRA開催日でない場合に、地方競馬、海外競馬、障害競走を代わりに表示してはいけません。
-・今日、今週、来週、先週の重賞を聞かれた場合は、必ず現在日付を基準にJRA平地重賞だけを確認します。
-・重賞と聞かれた場合は、障害重賞と特別競走を混ぜません。
-・重賞はG1、G2、G3、GI、GII、GIIIだけです。
-・J-GI、J-GII、J-GIIIは障害重賞なので除外します。
-・特別以上と聞かれた場合だけ、特別競走、オープン特別、リステッド、重賞を含めます。
-・特別と聞かれた場合は、重賞を含めません。
-・未勝利と聞かれた場合は、JRA平地の未勝利戦だけ確認し、過去走3走以上が確認できる場合だけ本格予想します。
-・古い年度の重賞一覧を誤って返してはいけません。
-・ユーザーが月指定した場合は、その年月を対象に確認できる範囲で返します。
-
-【保存・集計】
-・予想、結果、検証、一覧の返信内容は、アプリ側で保存される前提です。
-・保存された内容を使って、あとで成績集計や反省に使います。
-・ただし、保存データを直接参照できない場合は、確認できる範囲だけで返します。
+・LINEなので長すぎず、読みやすく返します。
+・Markdown記法、URL、出典リンクは出しません。
+・確認できない情報は作らず「不明」と書きます。
+・障害レース、地方競馬は一覧に入れません。
 
 【買い目ルール】
-・人気、オッズ、払戻、結果は予想印や勝負度に使いません。
 ・買い目は単勝、複勝、ワイド、三連複のみです。
 ・馬連、枠連、馬単、三連単は出しません。
 `;
@@ -535,7 +482,6 @@ function getFixedReply(userText) {
       "・今週の重賞",
       "・来週の重賞",
       "・先週の重賞",
-      "・2026年1月の特別以上レース",
       "・今日の特別",
       "・今週の特別",
       "・今日の未勝利",
@@ -548,8 +494,7 @@ function getFixedReply(userText) {
       "・JRA平地レースのみ",
       "・重賞はG1、G2、G3のみ",
       "・障害、地方、海外、新馬は対象外",
-      "・未勝利は、過去走3走以上が確認できる場合だけ本格予想します。",
-      "・確認できない情報は作らず、不明と返します。"
+      "・未勝利は、過去走3走以上が確認できる場合だけ本格予想します。"
     ].join("\n");
   }
 
@@ -610,9 +555,80 @@ function getNotTargetReply() {
 }
 
 // ==============================
-// Web検索つきOpenAI呼び出し
+// 重賞一覧専用OpenAI呼び出し
+// ==============================
+async function callHeavyRaceListWithWeb(userText) {
+  const todayJstText = getTodayJstText();
+  const nowJstText = getNowJstIsoText();
+
+  const prompt = [
+    `現在日付は日本時間で ${todayJstText} です。`,
+    `現在時刻は日本時間で ${nowJstText} です。`,
+    "",
+    "ユーザーの依頼：",
+    userText,
+    "",
+    "JRA公式または信頼できる競馬情報で、対象期間のJRA平地重賞だけを確認してください。",
+    "",
+    "絶対条件：",
+    "・JRA平地重賞のみ",
+    "・G1、G2、G3、GI、GII、GIIIのみ",
+    "・J-GI、J-GII、J-GIIIは障害重賞なので除外",
+    "・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど障害は除外",
+    "・特別競走、オープン特別、リステッド、未勝利、新馬、地方、海外は除外",
+    "・ステークスという名前だけで重賞扱いしない",
+    "・グレードを確認できないレースは入れない",
+    "",
+    "返答は説明文なしで、必ずJSON配列だけにしてください。",
+    "各要素は以下の形にしてください。",
+    "",
+    "[",
+    "  {",
+    '    "date": "5月16日（土）",',
+    '    "racecourse": "東京",',
+    '    "raceNo": "11R",',
+    '    "raceName": "レース名",',
+    '    "grade": "GIII",',
+    '    "startTime": "15:30",',
+    '    "course": "芝1600m",',
+    '    "raceType": "JRA平地重賞",',
+    '    "memo": ""',
+    "  }",
+    "]"
+  ].join("\n");
+
+  const response = await openai.responses.create({
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    tools: [
+      {
+        type: "web_search"
+      }
+    ],
+    input: [
+      {
+        role: "system",
+        content: "あなたはJRA平地重賞だけを確認する競馬データ整理AIです。障害、特別、地方、海外を絶対に混ぜません。返答は必ずJSON配列だけです。",
+      },
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+    max_output_tokens: 1200,
+  });
+
+  const arr = extractJsonArray(response.output_text || "");
+  return formatHeavyRaceList(arr, userText);
+}
+
+// ==============================
+// 通常Web検索つきOpenAI呼び出し
 // ==============================
 async function callUmaDataChanWithWeb(userText) {
+  if (isHeavyRaceOnlyRequest(userText)) {
+    return callHeavyRaceListWithWeb(userText);
+  }
+
   const todayJstText = getTodayJstText();
   const nowJstText = getNowJstIsoText();
 
@@ -621,26 +637,14 @@ async function callUmaDataChanWithWeb(userText) {
     `現在時刻は日本時間で ${nowJstText} です。`,
     "",
     "ユーザーの「今日」「明日」「昨日」「今週」「来週」「先週」は、必ず上の日本時間を基準に判断してください。",
-    "ユーザーが年を指定していない場合は、現在日付の年を基準にしてください。",
     "現在日付と無関係な古い年度の一覧を返してはいけません。",
     "",
-    "最初に確認すること：",
-    "・今日のレースを聞かれた場合は、JRA中央競馬の開催日かどうかを最初に確認する。",
-    "・JRA開催日でない場合は、本日はJRA開催がありません、と返す。",
-    "・JRA開催日でない場合に、地方競馬や海外競馬を代わりに表示してはいけない。",
-    "",
     "対象判定ルール：",
-    "・ユーザーが「重賞」と聞いた場合は、JRA平地重賞のみ。G1、G2、G3、GI、GII、GIIIのみ。J-GI、J-GII、J-GIIIは障害なので除外。",
-    "・ユーザーが「重賞」と聞いた場合、特別競走、オープン特別、リステッド、未勝利は混ぜない。",
-    "・ユーザーが「特別以上」と聞いた場合は、JRA平地の特別競走、オープン特別、リステッド、重賞を対象にする。",
-    "・ユーザーが「特別」と聞いた場合は、JRA平地の特別競走のみ。重賞は混ぜない。",
-    "・ユーザーが「未勝利」と聞いた場合は、JRA平地の未勝利戦のみ。過去走3走以上が確認できる場合だけ本格予想する。",
-    "・ユーザーが「結果」と聞いた場合は、予想ではなく結果を確認する。",
-    "・ユーザーが「検証」「集計」「成績」「反省」と聞いた場合は、確認できる予想内容と結果だけで検証する。",
+    "・重賞はJRA平地のG1、G2、G3のみ。障害重賞、特別競走、未勝利は混ぜない。",
+    "・特別以上は、JRA平地の特別競走、オープン特別、リステッド、重賞。",
+    "・特別は、JRA平地の特別競走のみ。重賞は混ぜない。",
+    "・未勝利は、JRA平地の未勝利戦のみ。過去走3走以上が確認できる場合だけ本格予想。",
     "・障害、地方、海外、新馬は常に対象外。",
-    "・川崎競馬場、浦和競馬場、大井競馬場、船橋競馬場、園田競馬場、高知競馬場、佐賀競馬場、名古屋競馬場、笠松競馬場、門別競馬場、金沢競馬場、水沢競馬場、盛岡競馬場など地方競馬は絶対に表示しない。",
-    "・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど障害レースは絶対に表示しない。",
-    "・栗東ステークス、弥彦ステークス、六社ステークスなどの特別競走を重賞一覧に入れない。",
     "",
     "LINE返信なのでMarkdown記法、URL、出典リンクは使わないでください。",
     "確認できない情報は作らず、不明と書いてください。",
@@ -669,8 +673,7 @@ async function callUmaDataChanWithWeb(userText) {
     max_output_tokens: 1800,
   });
 
-  const cleaned = cleanLineReply(response.output_text || "返答を作れませんでした。");
-  return filterHeavyRaceReplyIfNeeded(userText, cleaned);
+  return cleanLineReply(response.output_text || "返答を作れませんでした。");
 }
 
 // ==============================
@@ -760,7 +763,7 @@ async function handleEvent(event) {
 
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: aiReply.slice(0, 4800),
+      text: cleanLineReply(aiReply).slice(0, 4800),
     });
   } catch (err) {
     console.error("OpenAI API error:", {
