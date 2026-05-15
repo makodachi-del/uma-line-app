@@ -57,10 +57,92 @@ function cleanLineReply(text) {
     .replace(/https?:\/\/\S+/g, "")
     .replace(/【\d+:\d+†[^】]+】/g, "")
     .replace(/]+/g, "")
-    .replace(/]+/g, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+// ==============================
+// 重賞返信の最終フィルター
+// ==============================
+function filterHeavyRaceReplyIfNeeded(userText, replyText) {
+  const text = String(userText || "");
+  let reply = String(replyText || "");
+
+  const isHeavyRaceRequest =
+    text.includes("重賞") &&
+    !text.includes("特別以上") &&
+    !text.includes("特別") &&
+    !text.includes("未勝利");
+
+  if (!isHeavyRaceRequest) {
+    return reply;
+  }
+
+  const bannedWords = [
+    "ジャンプ",
+    "ハイジャンプ",
+    "グランドジャンプ",
+    "障害",
+    "J-GI",
+    "J-GII",
+    "J-GIII",
+    "J・GI",
+    "J・GII",
+    "J・GIII",
+    "JGI",
+    "JGII",
+    "JGIII",
+    "栗東ステークス",
+    "弥彦ステークス",
+    "六社ステークス"
+  ];
+
+  const lines = reply.split("\n");
+  const keptLines = [];
+  let skipNextVenueLine = false;
+
+  for (const line of lines) {
+    const lineText = String(line || "");
+    const isBanned = bannedWords.some((word) => lineText.includes(word));
+
+    if (isBanned) {
+      skipNextVenueLine = true;
+      continue;
+    }
+
+    if (
+      skipNextVenueLine &&
+      (
+        lineText.includes("競馬場") ||
+        lineText.includes("発走") ||
+        lineText.includes("R ") ||
+        lineText.includes("R　")
+      )
+    ) {
+      skipNextVenueLine = false;
+      continue;
+    }
+
+    skipNextVenueLine = false;
+    keptLines.push(line);
+  }
+
+  reply = keptLines.join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (!reply || reply.length < 20) {
+    return [
+      "確認できた範囲では、今週のJRA平地重賞は不明です。",
+      "",
+      "障害重賞、特別競走、地方競馬は対象外として除外しました。",
+      "",
+      "JRA平地のG1、G2、G3だけを対象にしています。"
+    ].join("\n");
+  }
+
+  return reply;
 }
 
 // ==============================
@@ -185,7 +267,6 @@ function getNoJraTodayReplyIfNeeded(userText) {
   }
 
   const weekday = getJstWeekdayShort();
-
   const noJraWeekdays = ["火", "水", "木", "金"];
 
   if (!noJraWeekdays.includes(weekday)) {
@@ -254,12 +335,15 @@ JRA平地レース専用の競馬予想AIです。
 
 【重賞】
 ・ユーザーが「重賞」と聞いた場合は、JRA平地重賞のみ返します。
-・G1、G2、G3を対象にします。
+・対象はG1、G2、G3、GI、GII、GIIIのみです。
+・J-GI、J-GII、J-GIIIは障害重賞なので対象外です。
 ・障害重賞は対象外です。
-・特別競走や未勝利は混ぜません。
+・特別競走、オープン特別、リステッド、未勝利は混ぜません。
 ・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど、障害重賞は重賞として扱いません。
 ・検索結果に障害レースが含まれていても、必ず除外して返信します。
-・六社ステークスなどの特別競走を、重賞一覧に混ぜてはいけません。
+・六社ステークス、栗東ステークス、弥彦ステークスなどの特別競走を、重賞一覧に混ぜてはいけません。
+・「ステークス」という名前だけで重賞扱いしてはいけません。
+・グレード表記が確認できないレースは、重賞一覧に入れず「不明」とします。
 
 【特別以上】
 ・ユーザーが「特別以上」と聞いた場合は、JRA平地の特別競走、オープン特別、リステッド、重賞を対象にします。
@@ -269,7 +353,7 @@ JRA平地レース専用の競馬予想AIです。
 ・ユーザーが「特別」と聞いた場合は、JRA平地の特別競走を対象にします。
 ・重賞を含めるのは、ユーザーが「特別以上」と言った場合だけです。
 ・障害、新馬、未勝利、地方、海外は対象外です。
-・ユーザーが「重賞」と聞いた場合に、六社ステークスなどの特別競走を混ぜてはいけません。
+・ユーザーが「重賞」と聞いた場合に、六社ステークス、栗東ステークス、弥彦ステークスなどの特別競走を混ぜてはいけません。
 
 【未勝利】
 ・ユーザーが「未勝利」と聞いた場合は、JRA平地の未勝利戦のみ対象にします。
@@ -403,6 +487,8 @@ G 統合：
 ・JRA開催日でない場合に、地方競馬、海外競馬、障害競走を代わりに表示してはいけません。
 ・今日、今週、来週、先週の重賞を聞かれた場合は、必ず現在日付を基準にJRA平地重賞だけを確認します。
 ・重賞と聞かれた場合は、障害重賞と特別競走を混ぜません。
+・重賞はG1、G2、G3、GI、GII、GIIIだけです。
+・J-GI、J-GII、J-GIIIは障害重賞なので除外します。
 ・特別以上と聞かれた場合だけ、特別競走、オープン特別、リステッド、重賞を含めます。
 ・特別と聞かれた場合は、重賞を含めません。
 ・未勝利と聞かれた場合は、JRA平地の未勝利戦だけ確認し、過去走3走以上が確認できる場合だけ本格予想します。
@@ -544,7 +630,8 @@ async function callUmaDataChanWithWeb(userText) {
     "・JRA開催日でない場合に、地方競馬や海外競馬を代わりに表示してはいけない。",
     "",
     "対象判定ルール：",
-    "・ユーザーが「重賞」と聞いた場合は、JRA平地重賞のみ。G1、G2、G3のみ。障害重賞、特別競走、未勝利は混ぜない。",
+    "・ユーザーが「重賞」と聞いた場合は、JRA平地重賞のみ。G1、G2、G3、GI、GII、GIIIのみ。J-GI、J-GII、J-GIIIは障害なので除外。",
+    "・ユーザーが「重賞」と聞いた場合、特別競走、オープン特別、リステッド、未勝利は混ぜない。",
     "・ユーザーが「特別以上」と聞いた場合は、JRA平地の特別競走、オープン特別、リステッド、重賞を対象にする。",
     "・ユーザーが「特別」と聞いた場合は、JRA平地の特別競走のみ。重賞は混ぜない。",
     "・ユーザーが「未勝利」と聞いた場合は、JRA平地の未勝利戦のみ。過去走3走以上が確認できる場合だけ本格予想する。",
@@ -553,6 +640,7 @@ async function callUmaDataChanWithWeb(userText) {
     "・障害、地方、海外、新馬は常に対象外。",
     "・川崎競馬場、浦和競馬場、大井競馬場、船橋競馬場、園田競馬場、高知競馬場、佐賀競馬場、名古屋競馬場、笠松競馬場、門別競馬場、金沢競馬場、水沢競馬場、盛岡競馬場など地方競馬は絶対に表示しない。",
     "・京都ハイジャンプ、中山グランドジャンプ、阪神ジャンプステークスなど障害レースは絶対に表示しない。",
+    "・栗東ステークス、弥彦ステークス、六社ステークスなどの特別競走を重賞一覧に入れない。",
     "",
     "LINE返信なのでMarkdown記法、URL、出典リンクは使わないでください。",
     "確認できない情報は作らず、不明と書いてください。",
@@ -581,7 +669,8 @@ async function callUmaDataChanWithWeb(userText) {
     max_output_tokens: 1800,
   });
 
-  return cleanLineReply(response.output_text || "返答を作れませんでした。");
+  const cleaned = cleanLineReply(response.output_text || "返答を作れませんでした。");
+  return filterHeavyRaceReplyIfNeeded(userText, cleaned);
 }
 
 // ==============================
