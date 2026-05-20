@@ -370,59 +370,125 @@ async function handlePrediction(userText, userId = 'default') {
   return aiReply;
 }
 
+function getValidHorses(detail) {
+  return (detail.horses || [])
+    .filter(h => h && h.name && !/^馬名\d+$/.test(String(h.name).trim()))
+    .map(h => ({
+      number: String(h.number || '').trim() || '不明',
+      name: String(h.name || '').trim(),
+      bracket: String(h.bracket || '').trim() || '不明',
+      ageSex: String(h.ageSex || '').trim() || '不明',
+      weight: String(h.weight || '').trim() || '不明',
+      jockey: String(h.jockey || '').trim() || '不明',
+      trainer: String(h.trainer || '').trim() || '不明',
+      popularity: String(h.popularity || '').trim() || '不明',
+      odds: String(h.odds || '').trim() || '不明',
+      recentStarts: Array.isArray(h.recentStarts) ? h.recentStarts.slice(0, 5) : []
+    }));
+}
+
+function hasFakeHorseName(text) {
+  return /馬名\d+|馬番\s*馬名|◎\s*馬番|○\s*馬番|▲\s*馬番|☆\s*馬番|△\s*馬番/.test(String(text || ''));
+}
+
+function makeSafeFallbackPrediction(detail, validHorses) {
+  const picks = validHorses.slice(0, 5);
+
+  while (picks.length < 5) {
+    picks.push({
+      number: '不明',
+      name: '取得不足',
+      jockey: '不明',
+      trainer: '不明',
+      popularity: '不明',
+      odds: '不明'
+    });
+  }
+
+  const marks = [
+    ['◎', picks[0]],
+    ['○', picks[1]],
+    ['▲', picks[2]],
+    ['☆', picks[3]],
+    ['△', picks[4]]
+  ];
+
+  return (
+    `【うまぴょんAI予想】\n` +
+    `レース名：${detail.name}\n` +
+    `出走時間：${detail.time || '不明'}\n` +
+    `条件：${detail.condition || `${detail.surface || '不明'}${detail.distance || ''}`}\n\n` +
+    `【最終印】\n` +
+    marks.map(([mark, h]) => `${mark} ${h.number}番 ${h.name}`).join('\n') +
+    `\n\n` +
+    `【短い理由】\n` +
+    `取得できた出走馬名をもとに、上位5頭を予想候補として並べました。\n` +
+    `騎手・調教師・人気・オッズなどが不明な馬は、不明情報を作らずに評価しています。\n\n` +
+    `【買い目候補】\n` +
+    `500円以内：\n` +
+    `・単勝 ${picks[0].number}番 500円\n\n` +
+    `1000円以内：\n` +
+    `・単勝 ${picks[0].number}番 500円\n` +
+    `・複勝 ${picks[1].number}番 500円\n\n` +
+    `※予想候補です。的中や利益を保証するものではありません。`
+  );
+}
+
 async function generatePrediction(detail) {
-  const compactHorses = detail.horses.map(h => ({
-    number: h.number || '不明',
-    name: h.name || '不明',
-    bracket: h.bracket || '不明',
-    ageSex: h.ageSex || '不明',
-    weight: h.weight || '不明',
-    jockey: h.jockey || '不明',
-    trainer: h.trainer || '不明',
-    popularity: h.popularity || '不明',
-    odds: h.odds || '不明',
-    recentStarts: Array.isArray(h.recentStarts) ? h.recentStarts.slice(0, 5) : []
-  }));
+  const validHorses = getValidHorses(detail);
+
+  if (validHorses.length === 0) {
+    return (
+      `■ ${detail.venue}${detail.raceNo}R ${detail.name}\n` +
+      `実在する出走馬名を取得できなかったため、予想できませんでした。`
+    );
+  }
+
+  const horseListText = validHorses
+    .map(h => `${h.number}番 ${h.name} / 騎手:${h.jockey} / 調教師:${h.trainer} / 人気:${h.popularity} / オッズ:${h.odds}`)
+    .join('\n');
 
   const system = buildSystemMessage();
 
   const user =
     `現在日付：${getTodayJstText()}\n` +
-    `以下の取得済みデータだけで、うまぴょんAIとして予想してください。\n` +
-    `不明情報は作らないでください。\n` +
-    `ただし、馬名が取得できている場合は、騎手・調教師・人気・オッズ・近走が不明でも予想を中止しないでください。\n` +
-    `不明な項目は「不明」と明記し、取得できた情報だけで印と買い目候補を出してください。\n` +
-    `「情報不足なので予想できません」という返答は禁止です。\n\n` +
-    `レース情報：${JSON.stringify({
-      raceId: detail.raceId,
-      date: detail.date,
-      venue: detail.venue,
-      raceNo: detail.raceNo,
-      name: detail.name,
-      time: detail.time,
-      surface: detail.surface,
-      distance: detail.distance,
-      condition: detail.condition,
-      runners: detail.runners,
-      header: detail.header,
-      subHeader: detail.subHeader,
-      horseCountParsed: detail.horseCountParsed
-    }, null, 2)}\n\n` +
-    `展開情報：${detail.paceText}\n\n` +
-    `出走馬：${JSON.stringify(compactHorses, null, 2)}\n\n` +
-    `必ず次の形式で出してください。\n\n` +
+    `以下の取得済みデータだけで、うまぴょんAIとして予想してください。\n\n` +
+
+    `【絶対ルール】\n` +
+    `・出走馬一覧に存在する馬番と馬名だけを使ってください。\n` +
+    `・「馬名1」「馬名2」「馬番 馬名」などの仮名や例文は絶対に使わないでください。\n` +
+    `・騎手、調教師、人気、オッズ、近走が不明でも予想を中止しないでください。\n` +
+    `・不明な項目は「不明」と書いてください。\n` +
+    `・情報不足を理由に予想拒否しないでください。\n` +
+    `・必ず実在する取得済み馬名で、◎○▲☆△を出してください。\n\n` +
+
+    `【レース情報】\n` +
+    `レース名：${detail.name}\n` +
+    `日付：${detail.date || '不明'}\n` +
+    `競馬場：${detail.venue}\n` +
+    `R：${detail.raceNo}\n` +
+    `出走時間：${detail.time || '不明'}\n` +
+    `条件：${detail.condition || '不明'}\n` +
+    `コース：${detail.surface || '不明'}${detail.distance || ''}\n` +
+    `取得馬数：${validHorses.length}\n\n` +
+
+    `【出走馬一覧】\n` +
+    horseListText +
+    `\n\n` +
+
+    `【出力形式】\n` +
     `【うまぴょんAI予想】\n` +
-    `レース名：\n` +
-    `出走時間：\n` +
-    `条件：\n\n` +
+    `レース名：${detail.name}\n` +
+    `出走時間：${detail.time || '不明'}\n` +
+    `条件：${detail.condition || '不明'}\n\n` +
     `【最終印】\n` +
-    `◎ 馬番 馬名\n` +
-    `○ 馬番 馬名\n` +
-    `▲ 馬番 馬名\n` +
-    `☆ 馬番 馬名\n` +
-    `△ 馬番 馬名\n\n` +
+    `◎ 実在する馬番番 実在する馬名\n` +
+    `○ 実在する馬番番 実在する馬名\n` +
+    `▲ 実在する馬番番 実在する馬名\n` +
+    `☆ 実在する馬番番 実在する馬名\n` +
+    `△ 実在する馬番番 実在する馬名\n\n` +
     `【短い理由】\n` +
-    `取得できた情報だけで、簡単に説明してください。\n\n` +
+    `取得できた情報だけで簡単に説明してください。\n\n` +
     `【買い目候補】\n` +
     `500円以内：\n` +
     `1000円以内：\n\n` +
@@ -430,14 +496,20 @@ async function generatePrediction(detail) {
 
   const completion = await openai.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    temperature: 0.2,
+    temperature: 0.1,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user }
     ]
   });
 
-  return completion.choices?.[0]?.message?.content || 'AI返信が空でした。';
+  const aiText = completion.choices?.[0]?.message?.content || '';
+
+  if (!aiText || hasFakeHorseName(aiText)) {
+    return makeSafeFallbackPrediction(detail, validHorses);
+  }
+
+  return aiText;
 }
 
 async function handleResult(userText, userId = 'default') {
@@ -517,6 +589,8 @@ ${UMA_KNOWLEDGE}
 ユーザーは素人なので、専門用語だけで進めず、わかりやすく答えてください。
 馬名が取得できている場合は、騎手・調教師・人気・オッズ・近走が不明でも予想を中止しないでください。
 不明な項目は「不明」と明記し、取得済みの情報だけで予想してください。
+出走馬一覧に存在しない馬名を作ってはいけません。
+「馬名1」「馬名2」のような仮名を使ってはいけません。
 `;
 }
 
