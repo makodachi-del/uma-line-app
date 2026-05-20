@@ -47,20 +47,6 @@ const KNOWN_RACE_FALLBACK = {
   ]
 };
 
-const HORSE_FALLBACK_BY_RACE_ID = {
-  '202608030911': [
-    { number: '1', name: 'ナルカミ', ageSex: '牡4', weight: '59.0', trainer: '田中博康' },
-    { number: '2', name: 'ハグ', ageSex: '牡4', weight: '57.0', trainer: '藤岡健一' },
-    { number: '3', name: 'ポッドロゴ', ageSex: '牡5', weight: '57.0', trainer: '西園翔太' },
-    { number: '4', name: 'マーブルロック', ageSex: '牡6', weight: '57.0', trainer: '茶木太樹' },
-    { number: '5', name: 'メイショウズイウン', ageSex: '牡4', weight: '57.0', trainer: '本田優' },
-    { number: '6', name: 'メリークリスマス', ageSex: '牡4', weight: '57.0', trainer: '小手川準' },
-    { number: '7', name: 'レヴォントゥレット', ageSex: '牡5', weight: '57.0', trainer: '矢作芳人' },
-    { number: '8', name: 'ロードクロンヌ', ageSex: '牡5', weight: '58.0', trainer: '四位洋文' },
-    { number: '9', name: 'ヴァルツァーシャル', ageSex: '牡7', weight: '57.0', trainer: '高木登' }
-  ]
-};
-
 function formatDateYmd(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -501,23 +487,6 @@ function parseHorseRows($) {
   return horses;
 }
 
-function getFallbackHorses(raceId) {
-  const list = HORSE_FALLBACK_BY_RACE_ID[String(raceId || '')] || [];
-
-  return list.map(h => normalizeHorse({
-    number: h.number,
-    bracket: h.bracket || '不明',
-    name: h.name,
-    ageSex: h.ageSex || '不明',
-    weight: h.weight || '不明',
-    jockey: h.jockey || '不明',
-    trainer: h.trainer || '不明',
-    odds: h.odds || '不明',
-    popularity: h.popularity || '不明',
-    recentStarts: []
-  })).filter(h => !isBadHorseName(h.name));
-}
-
 async function fetchRaceDetail(race) {
   if (!race || !race.raceId) {
     throw new Error('レース情報がありません。');
@@ -525,60 +494,39 @@ async function fetchRaceDetail(race) {
 
   const url = `https://race.netkeiba.com/race/shutuba.html?race_id=${race.raceId}`;
 
-  try {
-    const html = await fetchHtml(url);
-    const $ = cheerio.load(html);
-    let horses = parseHorseRows($);
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  const horses = parseHorseRows($);
 
-    const header = cleanText($('.RaceData01').first().text());
-    const subHeader = cleanText($('.RaceData02').first().text());
-    const { surface, distance } = parseSurfaceDistance(header);
+  const header = cleanText($('.RaceData01').first().text());
+  const subHeader = cleanText($('.RaceData02').first().text());
+  const { surface, distance } = parseSurfaceDistance(header);
 
-    const validNumberCount = horses.filter(h =>
-      /^\d{1,2}$/.test(String(h.number || ''))
-    ).length;
+  const validNumberCount = horses.filter(h =>
+    /^\d{1,2}$/.test(String(h.number || ''))
+  ).length;
 
-    if (horses.length < 5 || validNumberCount < 5) {
-      const fallback = getFallbackHorses(race.raceId);
-      if (fallback.length >= 5) {
-        horses = fallback;
-      }
-    }
+  const isEntryConfirmed = horses.length >= 5 && validNumberCount >= 5;
 
-    return {
-      ...race,
-      url,
-      header,
-      subHeader,
-      surface: race.surface || surface,
-      distance: race.distance || distance,
-      horseCountParsed: horses.length,
-      enoughHorseCount: horses.length,
-      hasEnoughForm: horses.length >= 5,
-      paceText: '取得済み馬名だけで推定してください。不明情報は作らないでください。',
-      horses
-    };
-  } catch (error) {
-    const fallback = getFallbackHorses(race.raceId);
-
-    if (fallback.length >= 5) {
-      return {
-        ...race,
-        url,
-        header: '',
-        subHeader: '',
-        surface: race.surface || '',
-        distance: race.distance || '',
-        horseCountParsed: fallback.length,
-        enoughHorseCount: fallback.length,
-        hasEnoughForm: true,
-        paceText: `netkeiba取得エラーのため固定補助データ使用。エラー：${error.message}`,
-        horses: fallback
-      };
-    }
-
-    throw error;
-  }
+  return {
+    ...race,
+    url,
+    header,
+    subHeader,
+    surface: race.surface || surface,
+    distance: race.distance || distance,
+    horseCountParsed: horses.length,
+    enoughHorseCount: horses.length,
+    hasEnoughForm: isEntryConfirmed,
+    entryConfirmed: isEntryConfirmed,
+    entryStatusMessage: isEntryConfirmed
+      ? '出馬表を確認できました。'
+      : '出馬表がまだ確定していません。馬番が確認できないため、正式な予想はできません。出馬表確定後にもう一度送ってください。',
+    paceText: isEntryConfirmed
+      ? '出馬表取得済み。取得できない情報は作らないでください。'
+      : '出馬表未確定。正式予想は行わないでください。',
+    horses: isEntryConfirmed ? horses : []
+  };
 }
 
 async function fetchResult(race) {
