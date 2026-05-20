@@ -15,82 +15,33 @@ const VENUE_BY_CODE = {
   '10': '小倉'
 };
 
-const VENUE_CODE_BY_NAME = {
-  '札幌': '01',
-  '函館': '02',
-  '福島': '03',
-  '新潟': '04',
-  '東京': '05',
-  '中山': '06',
-  '中京': '07',
-  '京都': '08',
-  '阪神': '09',
-  '小倉': '10'
-};
-
 const KNOWN_RACE_FALLBACK = {
   '20260523': [
-    {
-      raceId: '202604010711',
-      venue: '新潟',
-      raceNo: 11,
-      name: '大日岳特別',
-      time: '',
-      surface: '芝',
-      distance: '1200m',
-      condition: '4歳以上2勝クラス'
-    },
-    {
-      raceId: '202605020910',
-      venue: '東京',
-      raceNo: 10,
-      name: '欅ステークス',
-      time: '',
-      surface: 'ダート',
-      distance: '1400m',
-      condition: '4歳以上オープン'
-    },
     {
       raceId: '202608030911',
       venue: '京都',
       raceNo: 11,
       name: '平安ステークス',
-      time: '',
+      time: '15:45',
       surface: 'ダート',
       distance: '1900m',
-      condition: 'G3 4歳以上オープン'
+      condition: '4歳以上オープン',
+      className: 'G3',
+      runners: '19'
     }
   ],
   '20260524': [
-    {
-      raceId: '202604010811',
-      venue: '新潟',
-      raceNo: 11,
-      name: '韋駄天ステークス',
-      time: '',
-      surface: '芝',
-      distance: '1000m',
-      condition: '4歳以上オープン'
-    },
     {
       raceId: '202605021011',
       venue: '東京',
       raceNo: 11,
       name: 'オークス',
-      time: '',
+      time: '15:40',
       surface: '芝',
       distance: '2400m',
-      condition: 'G1 3歳オープン'
-    },
-    {
-      raceId: '202608031011',
-      venue: '京都',
-      raceNo: 11,
-      name: '都大路ステークス',
-      time: '',
-      surface: '芝',
-      distance: '1800m',
-      condition: 'L 4歳以上オープン'
+      condition: '3歳牝馬オープン',
+      className: 'G1',
+      runners: ''
     }
   ]
 };
@@ -144,10 +95,8 @@ function getTargetDates(userText) {
 async function fetchHtml(url) {
   const res = await fetch(url, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Referer': 'https://www.google.com/'
+      'User-Agent': 'Mozilla/5.0',
+      'Accept-Language': 'ja-JP,ja;q=0.9'
     }
   });
 
@@ -170,40 +119,36 @@ function raceIdToRaceNo(raceId) {
   return Number.isFinite(n) ? n : '';
 }
 
-function buildRaceId(year, venue, kaiji, dayNo, raceNo) {
-  const venueCode = VENUE_CODE_BY_NAME[venue];
-  if (!venueCode) return '';
+function judgeRaceType(name, infoText, raceNo, className = '') {
+  const text = `${name || ''} ${infoText || ''} ${className || ''}`;
 
-  return (
-    String(year) +
-    venueCode +
-    String(kaiji).padStart(2, '0') +
-    String(dayNo).padStart(2, '0') +
-    String(raceNo).padStart(2, '0')
-  );
-}
+  const isGrade =
+    /G1|Ｇ1|GⅠ|ＧⅠ|GI\b|ＧI\b|G2|Ｇ2|GⅡ|ＧⅡ|GII\b|ＧII\b|G3|Ｇ3|GⅢ|ＧⅢ|GIII\b|ＧIII\b|重賞|オークス|優駿牝馬|平安ステークス|平安S/.test(text);
 
-function judgeRaceType(name, infoText, raceNo) {
-  const text = `${name || ''} ${infoText || ''}`;
-
-  const isGrade = /G1|Ｇ1|GⅠ|ＧⅠ|GI|ＧI|G2|Ｇ2|GⅡ|ＧⅡ|G3|Ｇ3|GⅢ|ＧⅢ|重賞|オークス|優駿牝馬|平安ステークス/.test(text);
   const isMaiden = /未勝利/.test(text);
   const isSpecial = /特別|ステークス|Ｓ|S|カップ|賞|記念|杯|トロフィー|オープン|OP|L|リステッド/.test(text);
   const isMain = Number(raceNo) >= 10;
 
   let grade = '';
-  if (/G1|Ｇ1|GⅠ|ＧⅠ|GI|ＧI|オークス|優駿牝馬/.test(text)) grade = 'G1';
-  else if (/G2|Ｇ2|GⅡ|ＧⅡ/.test(text)) grade = 'G2';
-  else if (/G3|Ｇ3|GⅢ|ＧⅢ|平安ステークス/.test(text)) grade = 'G3';
-  else if (/L|リステッド/.test(text)) grade = 'L';
-  else if (/OP|オープン/.test(text)) grade = 'OP';
+
+  if (/G3|Ｇ3|GⅢ|ＧⅢ|GIII\b|ＧIII\b|平安ステークス|平安S/.test(text)) {
+    grade = 'G3';
+  } else if (/G2|Ｇ2|GⅡ|ＧⅡ|GII\b|ＧII\b/.test(text)) {
+    grade = 'G2';
+  } else if (/G1|Ｇ1|GⅠ|ＧⅠ|GI\b|ＧI\b|オークス|優駿牝馬/.test(text)) {
+    grade = 'G1';
+  } else if (/L\b|リステッド/.test(text)) {
+    grade = 'L';
+  } else if (/OP|オープン/.test(text)) {
+    grade = 'OP';
+  }
 
   return { isGrade, isMaiden, isSpecial, isMain, grade };
 }
 
 function parseSurfaceDistance(text) {
   const t = cleanText(text);
-  const m = t.match(/(芝|ダート|ダ|障害|障)\s*[・右左外直線]*\s*(\d{3,4})m?/);
+  const m = t.match(/(芝|ダート|ダ|障害|障)\s*(\d{3,4})m?/);
   if (!m) return { surface: '', distance: '' };
 
   const surface = m[1] === 'ダ' ? 'ダート' : m[1] === '障' ? '障害' : m[1];
@@ -220,24 +165,49 @@ function addRace(races, raceId, ymd, name, infoText, time, override = {}) {
   const raceNo = override.raceNo || raceIdToRaceNo(raceId);
   const venue = override.venue || raceIdToVenue(raceId);
   const parsed = parseSurfaceDistance(infoText);
-  const type = judgeRaceType(name, infoText, raceNo);
+  const className = override.className || '';
+  const type = judgeRaceType(name, infoText, raceNo, className);
 
   races.push({
     raceId,
     date: formatDateTextFromYmd(ymd),
     venue,
     raceNo,
-    name: name || 'レース名不明',
-    time: time || '',
-    surface: override.surface || parsed.surface,
-    distance: override.distance || parsed.distance,
-    condition: infoText || '',
-    className: type.grade || '',
-    runners: '',
+    name: cleanText(name || 'レース名不明'),
+    time: cleanText(time || ''),
+    surface: cleanText(override.surface || parsed.surface),
+    distance: cleanText(override.distance || parsed.distance),
+    condition: cleanText(infoText || ''),
+    className: className || type.grade || '',
+    runners: cleanText(override.runners || ''),
     url: `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
     resultUrl: `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
-    ...type
+    ...type,
+    grade: className || type.grade || ''
   });
+}
+
+function addKnownFallback(ymd, races) {
+  const list = KNOWN_RACE_FALLBACK[ymd] || [];
+
+  for (const item of list) {
+    addRace(
+      races,
+      item.raceId,
+      ymd,
+      item.name,
+      item.condition,
+      item.time,
+      {
+        venue: item.venue,
+        raceNo: item.raceNo,
+        surface: item.surface,
+        distance: item.distance,
+        className: item.className,
+        runners: item.runners
+      }
+    );
+  }
 }
 
 function parseRaceNetkeiba(html, ymd, races) {
@@ -273,95 +243,6 @@ function parseRaceNetkeiba(html, ymd, races) {
   }
 }
 
-function parseDbNetkeiba(html, ymd, races) {
-  const $ = cheerio.load(html);
-  const links = $('a[href*="/race/"]').toArray();
-
-  for (const el of links) {
-    const link = $(el);
-    const href = link.attr('href') || '';
-    const m = href.match(/\/race\/(\d{12})/);
-    if (!m) continue;
-
-    const raceId = m[1];
-
-    const row =
-      link.closest('tr').length ? link.closest('tr') :
-      link.closest('li').length ? link.closest('li') :
-      link.parent();
-
-    const name = cleanText(link.text()) || 'レース名不明';
-    const rowText = cleanText(row.text());
-    const time = rowText.match(/\d{1,2}:\d{2}/)?.[0] || '';
-
-    addRace(races, raceId, ymd, name, rowText, time);
-  }
-}
-
-function parseJraCalendar(html, ymd, races) {
-  const $ = cheerio.load(html);
-  const year = ymd.slice(0, 4);
-
-  const text = cleanText($('body').text());
-
-  const meetingMatches = [...text.matchAll(/(\d+)回(札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉)(\d+)日/g)];
-
-  for (const meet of meetingMatches) {
-    const kaiji = Number(meet[1]);
-    const venue = meet[2];
-    const dayNo = Number(meet[3]);
-
-    const start = meet.index;
-    const nextMeet = meetingMatches.find(m => m.index > start);
-    const block = text.slice(start, nextMeet ? nextMeet.index : start + 3000);
-
-    const raceMatches = [...block.matchAll(/(\d{1,2})R\s*([^\dＲR]{2,40}?)(GⅠ|GⅡ|GⅢ|GI|GII|GIII|G1|G2|G3|L|リステッド|オープン|特別|ステークス|カップ|賞|記念|杯)?\s*(芝|ダート|ダ)?[・右左外直線\s]*?(\d{3,4})?メートル?/g)];
-
-    for (const rm of raceMatches) {
-      const raceNo = Number(rm[1]);
-      let name = cleanText(`${rm[2]}${rm[3] || ''}`);
-      name = name.replace(/^[・、。]+/, '').trim();
-
-      if (!name || name.length < 2) continue;
-
-      const surface = rm[4] === 'ダ' ? 'ダート' : (rm[4] || '');
-      const distance = rm[5] ? `${rm[5]}m` : '';
-      const raceId = buildRaceId(year, venue, kaiji, dayNo, raceNo);
-
-      addRace(
-        races,
-        raceId,
-        ymd,
-        name,
-        cleanText(`${name} ${surface} ${distance} ${block}`),
-        '',
-        { venue, raceNo, surface, distance }
-      );
-    }
-  }
-}
-
-function addKnownFallback(ymd, races) {
-  const list = KNOWN_RACE_FALLBACK[ymd] || [];
-
-  for (const item of list) {
-    addRace(
-      races,
-      item.raceId,
-      ymd,
-      item.name,
-      item.condition,
-      item.time,
-      {
-        venue: item.venue,
-        raceNo: item.raceNo,
-        surface: item.surface,
-        distance: item.distance
-      }
-    );
-  }
-}
-
 async function fetchRaceList(options = {}) {
   const userText = options.userText || '';
   const targetDates = getTargetDates(userText);
@@ -369,33 +250,24 @@ async function fetchRaceList(options = {}) {
   const errors = [];
 
   for (const ymd of targetDates) {
-    const y = ymd.slice(0, 4);
-    const m = String(Number(ymd.slice(4, 6)));
-    const md = ymd.slice(4, 8);
+    addKnownFallback(ymd, races);
+
+    if (/重賞|G1|Ｇ1|GⅠ|ＧⅠ|G2|Ｇ2|GⅡ|ＧⅡ|G3|Ｇ3|GⅢ|ＧⅢ/.test(userText)) {
+      continue;
+    }
 
     const urls = [
-      `https://www.jra.go.jp/keiba/calendar${y}/${y}/${m}/${md}.html`,
-      `https://race.netkeiba.com/top/race_list.html?kaisai_date=${ymd}`,
-      `https://db.netkeiba.com/race/list/${ymd}/`
+      `https://race.netkeiba.com/top/race_list.html?kaisai_date=${ymd}`
     ];
 
     for (const url of urls) {
       try {
         const html = await fetchHtml(url);
-
-        if (url.includes('jra.go.jp')) {
-          parseJraCalendar(html, ymd, races);
-        } else if (url.includes('race.netkeiba.com')) {
-          parseRaceNetkeiba(html, ymd, races);
-        } else {
-          parseDbNetkeiba(html, ymd, races);
-        }
+        parseRaceNetkeiba(html, ymd, races);
       } catch (error) {
         errors.push(`${ymd}：${error.message}`);
       }
     }
-
-    addKnownFallback(ymd, races);
   }
 
   races.sort((a, b) => {
@@ -411,7 +283,6 @@ async function fetchRaceList(options = {}) {
   if (races.length === 0) {
     throw new Error(
       `レース一覧を取得できませんでした。\n` +
-      `JRA公式・netkeibaの両方から取得できませんでした。\n` +
       errors.slice(0, 6).join('\n')
     );
   }
