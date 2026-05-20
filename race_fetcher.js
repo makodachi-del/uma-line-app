@@ -46,6 +46,20 @@ const KNOWN_RACE_FALLBACK = {
   ]
 };
 
+const HORSE_FALLBACK_BY_RACE_ID = {
+  '202608030911': [
+    { number: '1', name: 'ナルカミ', ageSex: '牡4', weight: '59.0', trainer: '田中博康' },
+    { number: '2', name: 'ハグ', ageSex: '牡4', weight: '57.0', trainer: '藤岡健一' },
+    { number: '3', name: 'ポッドロゴ', ageSex: '牡5', weight: '57.0', trainer: '西園翔太' },
+    { number: '4', name: 'マーブルロック', ageSex: '牡6', weight: '57.0', trainer: '茶木太樹' },
+    { number: '5', name: 'メイショウズイウン', ageSex: '牡4', weight: '57.0', trainer: '本田優' },
+    { number: '6', name: 'メリークリスマス', ageSex: '牡4', weight: '57.0', trainer: '小手川準' },
+    { number: '7', name: 'レヴォントゥレット', ageSex: '牡5', weight: '57.0', trainer: '矢作芳人' },
+    { number: '8', name: 'ロードクロンヌ', ageSex: '牡5', weight: '58.0', trainer: '四位洋文' },
+    { number: '9', name: 'ヴァルツァーシャル', ageSex: '牡7', weight: '57.0', trainer: '高木登' }
+  ]
+};
+
 function formatDateYmd(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -319,11 +333,16 @@ function textAt(cells, index) {
 }
 
 function pickHorseName($, row, cells) {
+  const byLink =
+    cleanText(row.find('a[href*="/horse/"]').first().text()) ||
+    cleanText(row.find('a[href*="db.netkeiba.com/horse"]').first().text());
+
   return (
     cleanText(row.find('.HorseName').first().text()) ||
     cleanText(row.find('.Horse_Name').first().text()) ||
-    cleanText(row.find('a[href*="/horse/"]').first().text()) ||
+    byLink ||
     textAt(cells, 3) ||
+    textAt(cells, 2) ||
     ''
   );
 }
@@ -332,6 +351,7 @@ function pickJockey($, row, cells) {
   return (
     cleanText(row.find('.Jockey').first().text()) ||
     cleanText(row.find('a[href*="/jockey/"]').first().text()) ||
+    cleanText(row.find('a[href*="db.netkeiba.com/jockey"]').first().text()) ||
     textAt(cells, 6) ||
     ''
   );
@@ -341,9 +361,33 @@ function pickTrainer($, row, cells) {
   return (
     cleanText(row.find('.Trainer').first().text()) ||
     cleanText(row.find('a[href*="/trainer/"]').first().text()) ||
+    cleanText(row.find('a[href*="db.netkeiba.com/trainer"]').first().text()) ||
     textAt(cells, 7) ||
     ''
   );
+}
+
+function isBadHorseName(name) {
+  const n = cleanText(name);
+  if (!n) return true;
+  if (/^馬名\d+$/.test(n)) return true;
+  if (/馬番|枠|印|人気|オッズ|騎手|調教師|性齢|斤量/.test(n)) return true;
+  return false;
+}
+
+function normalizeHorse(h) {
+  return {
+    number: cleanText(h.number || '不明'),
+    bracket: cleanText(h.bracket || '不明'),
+    name: cleanText(h.name || ''),
+    ageSex: cleanText(h.ageSex || '不明'),
+    weight: cleanText(h.weight || '不明'),
+    jockey: cleanText(h.jockey || '不明'),
+    trainer: cleanText(h.trainer || '不明'),
+    odds: cleanText(h.odds || '不明'),
+    popularity: cleanText(h.popularity || '不明'),
+    recentStarts: Array.isArray(h.recentStarts) ? h.recentStarts : []
+  };
 }
 
 function parseHorseRows($) {
@@ -353,6 +397,7 @@ function parseHorseRows($) {
   const rows = $(
     [
       'tr.HorseList',
+      'tr[class*="HorseList"]',
       'table.Shutuba_Table tr',
       'table.RaceTable01 tr',
       'table.Nk_Table tr',
@@ -366,7 +411,14 @@ function parseHorseRows($) {
 
     if (!rowText) continue;
     if (!row.find('td').length) continue;
-    if (!row.find('a[href*="/horse/"]').length && !row.find('.HorseName').length && !row.find('.Horse_Name').length) continue;
+
+    const hasHorse =
+      row.find('a[href*="/horse/"]').length ||
+      row.find('a[href*="db.netkeiba.com/horse"]').length ||
+      row.find('.HorseName').length ||
+      row.find('.Horse_Name').length;
+
+    if (!hasHorse) continue;
 
     const cells = getCellTexts($, row);
 
@@ -381,7 +433,7 @@ function parseHorseRows($) {
       textAt(cells, 0);
 
     const name = pickHorseName($, row, cells);
-    if (!name) continue;
+    if (isBadHorseName(name)) continue;
 
     const key = `${number}_${name}`;
     if (seen.has(key)) continue;
@@ -410,7 +462,7 @@ function parseHorseRows($) {
       cleanText(row.find('.Ninki').first().text()) ||
       '';
 
-    horses.push({
+    horses.push(normalizeHorse({
       number,
       bracket,
       name,
@@ -418,15 +470,32 @@ function parseHorseRows($) {
       weight,
       jockey,
       trainer,
-      odds: odds || '不明',
-      popularity: popularity || '不明',
+      odds,
+      popularity,
       recentStarts: []
-    });
+    }));
   }
 
   horses.sort((a, b) => Number(a.number || 999) - Number(b.number || 999));
 
   return horses;
+}
+
+function getFallbackHorses(raceId) {
+  const list = HORSE_FALLBACK_BY_RACE_ID[String(raceId || '')] || [];
+
+  return list.map(h => normalizeHorse({
+    number: h.number,
+    bracket: h.bracket || '不明',
+    name: h.name,
+    ageSex: h.ageSex || '不明',
+    weight: h.weight || '不明',
+    jockey: h.jockey || '不明',
+    trainer: h.trainer || '不明',
+    odds: h.odds || '不明',
+    popularity: h.popularity || '不明',
+    recentStarts: []
+  })).filter(h => !isBadHorseName(h.name));
 }
 
 async function fetchRaceDetail(race) {
@@ -435,28 +504,63 @@ async function fetchRaceDetail(race) {
   }
 
   const url = `https://race.netkeiba.com/race/shutuba.html?race_id=${race.raceId}`;
-  const html = await fetchHtml(url);
-  const $ = cheerio.load(html);
+  let html = '';
+  let horses = [];
+  let fetchMemo = '';
 
-  const horses = parseHorseRows($);
+  try {
+    html = await fetchHtml(url);
+    const $ = cheerio.load(html);
+    horses = parseHorseRows($);
 
-  const header = cleanText($('.RaceData01').first().text());
-  const subHeader = cleanText($('.RaceData02').first().text());
-  const { surface, distance } = parseSurfaceDistance(header);
+    const header = cleanText($('.RaceData01').first().text());
+    const subHeader = cleanText($('.RaceData02').first().text());
+    const { surface, distance } = parseSurfaceDistance(header);
 
-  return {
-    ...race,
-    url,
-    header,
-    subHeader,
-    surface: race.surface || surface,
-    distance: race.distance || distance,
-    horseCountParsed: horses.length,
-    enoughHorseCount: horses.length,
-    hasEnoughForm: horses.length >= 5,
-    paceText: '展開は取得済み出走馬データから推定してください。不明情報は作らないでください。',
-    horses
-  };
+    if (horses.length < 5) {
+      const fallback = getFallbackHorses(race.raceId);
+      if (fallback.length >= 5) {
+        horses = fallback;
+        fetchMemo = 'netkeiba馬名取得不足のため固定補助データ使用';
+      }
+    }
+
+    return {
+      ...race,
+      url,
+      header,
+      subHeader,
+      surface: race.surface || surface,
+      distance: race.distance || distance,
+      horseCountParsed: horses.length,
+      enoughHorseCount: horses.length,
+      hasEnoughForm: horses.length >= 5,
+      paceText: fetchMemo
+        ? `${fetchMemo}。取得済み馬名だけで推定してください。不明情報は作らないでください。`
+        : '展開は取得済み出走馬データから推定してください。不明情報は作らないでください。',
+      horses
+    };
+  } catch (error) {
+    const fallback = getFallbackHorses(race.raceId);
+
+    if (fallback.length >= 5) {
+      return {
+        ...race,
+        url,
+        header: '',
+        subHeader: '',
+        surface: race.surface || '',
+        distance: race.distance || '',
+        horseCountParsed: fallback.length,
+        enoughHorseCount: fallback.length,
+        hasEnoughForm: true,
+        paceText: `netkeiba取得エラーのため固定補助データ使用。エラー：${error.message}`,
+        horses: fallback
+      };
+    }
+
+    throw error;
+  }
 }
 
 async function fetchResult(race) {
