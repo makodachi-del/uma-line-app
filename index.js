@@ -384,21 +384,47 @@ async function handlePrediction(userText, userId = 'default') {
   return aiReply;
 }
 
+function isNumericHorseNumber(value) {
+  return /^\d{1,2}$/.test(String(value || '').trim());
+}
+
 function getValidHorses(detail) {
   return (detail.horses || [])
     .filter(h => h && h.name && !/^馬名\d+$/.test(String(h.name).trim()))
-    .map(h => ({
-      number: String(h.number || '').trim() || '不明',
-      name: String(h.name || '').trim(),
-      bracket: String(h.bracket || '').trim() || '不明',
-      ageSex: String(h.ageSex || '').trim() || '不明',
-      weight: String(h.weight || '').trim() || '不明',
-      jockey: String(h.jockey || '').trim() || '不明',
-      trainer: String(h.trainer || '').trim() || '不明',
-      popularity: String(h.popularity || '').trim() || '不明',
-      odds: String(h.odds || '').trim() || '不明',
-      recentStarts: Array.isArray(h.recentStarts) ? h.recentStarts.slice(0, 5) : []
-    }));
+    .map(h => {
+      const rawNumber = String(h.number || '').trim();
+      const name = String(h.name || '').trim();
+
+      return {
+        number: isNumericHorseNumber(rawNumber) ? rawNumber : '',
+        name,
+        bracket: String(h.bracket || '').trim() || '不明',
+        ageSex: String(h.ageSex || '').trim() || '不明',
+        weight: String(h.weight || '').trim() || '不明',
+        jockey: String(h.jockey || '').trim() || '不明',
+        trainer: String(h.trainer || '').trim() || '不明',
+        popularity: String(h.popularity || '').trim() || '不明',
+        odds: String(h.odds || '').trim() || '不明',
+        recentStarts: Array.isArray(h.recentStarts) ? h.recentStarts.slice(0, 5) : []
+      };
+    })
+    .filter(h => h.name && !/�|���/.test(h.name));
+}
+
+function formatHorseForMark(h) {
+  if (!h) return '';
+  if (isNumericHorseNumber(h.number)) {
+    return `${h.number}番 ${h.name}`;
+  }
+  return `${h.name}`;
+}
+
+function formatHorseForBet(h) {
+  if (!h) return '不明';
+  if (isNumericHorseNumber(h.number)) {
+    return `${h.number}番`;
+  }
+  return `${h.name}`;
 }
 
 function makeSafeFallbackPrediction(detail, validHorses) {
@@ -410,7 +436,14 @@ function makeSafeFallbackPrediction(detail, validHorses) {
     if (Number.isFinite(ap)) return -1;
     if (Number.isFinite(bp)) return 1;
 
-    return Number(a.number || 999) - Number(b.number || 999);
+    const an = Number(a.number);
+    const bn = Number(b.number);
+
+    if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+    if (Number.isFinite(an)) return -1;
+    if (Number.isFinite(bn)) return 1;
+
+    return String(a.name).localeCompare(String(b.name), 'ja');
   });
 
   const picks = sorted.slice(0, 5);
@@ -428,17 +461,17 @@ function makeSafeFallbackPrediction(detail, validHorses) {
     `出走時間：${detail.time || '不明'}\n` +
     `条件：${detail.condition || `${detail.surface || '不明'}${detail.distance || ''}`}\n\n` +
     `【最終印】\n` +
-    marks.map(([mark, h]) => `${mark} ${h.number}番 ${h.name}`).join('\n') +
+    marks.map(([mark, h]) => `${mark} ${formatHorseForMark(h)}`).join('\n') +
     `\n\n` +
     `【短い理由】\n` +
     `取得できた出走馬名をもとに、馬番・人気・オッズなど取得済みの情報だけで並べました。\n` +
-    `不足している情報は作らず、不明として扱っています。\n\n` +
+    `馬番が正しく取れない馬は、馬名だけで表示しています。\n\n` +
     `【買い目候補】\n` +
     `500円以内：\n` +
-    `・単勝 ${picks[0]?.number || '不明'}番 500円\n\n` +
+    `・単勝 ${formatHorseForBet(picks[0])} 500円\n\n` +
     `1000円以内：\n` +
-    `・単勝 ${picks[0]?.number || '不明'}番 500円\n` +
-    `・複勝 ${picks[1]?.number || '不明'}番 500円\n\n` +
+    `・単勝 ${formatHorseForBet(picks[0])} 500円\n` +
+    `・複勝 ${formatHorseForBet(picks[1])} 500円\n\n` +
     `※予想候補です。的中や利益を保証するものではありません。`
   );
 }
