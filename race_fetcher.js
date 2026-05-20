@@ -69,11 +69,13 @@ async function fetchHtml(url) {
     }
   });
 
+  const text = await res.text();
+
   if (!res.ok) {
-    throw new Error(`取得失敗：${res.status} ${url}`);
+    throw new Error(`取得失敗：HTTP ${res.status}\nURL：${url}\n本文先頭：${text.slice(0, 200)}`);
   }
 
-  return await res.text();
+  return text;
 }
 
 function raceIdToVenue(raceId) {
@@ -108,54 +110,75 @@ function parseSurfaceDistance(text) {
   const t = cleanText(text);
   const m = t.match(/(芝|ダート|ダ|障害|障)\s*(\d{3,4})m?/);
 
-  if (!m) {
-    return { surface: '', distance: '' };
-  }
+  if (!m) return { surface: '', distance: '' };
 
   const surface = m[1] === 'ダ' ? 'ダート' : m[1] === '障' ? '障害' : m[1];
-  return { surface, distance: `${m[2]}m` };
+
+  return {
+    surface,
+    distance: `${m[2]}m`
+  };
 }
 
 async function fetchRaceList(options = {}) {
   const userText = options.userText || '';
   const targetDates = getTargetDates(userText);
   const races = [];
+  const errors = [];
 
   for (const ymd of targetDates) {
     const url = `https://race.netkeiba.com/top/race_list.html?kaisai_date=${ymd}`;
 
     let html = '';
+
     try {
       html = await fetchHtml(url);
-    } catch {
+    } catch (error) {
+      errors.push(`${ymd}：${error.message}`);
       continue;
     }
 
     const $ = cheerio.load(html);
 
-    const items = $('.RaceList_DataItem').toArray();
+    const links = $('a[href*="race_id="]').toArray();
 
-    for (const el of items) {
-      const item = $(el);
-      const link = item.find('a[href*="race_id="]').first();
+    if (links.length === 0) {
+      errors.push(`${ymd}：race_id付きリンクが見つかりません。HTML構造変更の可能性があります。`);
+      continue;
+    }
+
+    for (const el of links) {
+      const link = $(el);
       const href = link.attr('href') || '';
       const raceIdMatch = href.match(/race_id=(\d{12})/);
       if (!raceIdMatch) continue;
 
       const raceId = raceIdMatch[1];
+
+      if (races.some(r => r.raceId === raceId)) continue;
+
       const raceNo = raceIdToRaceNo(raceId);
       const venue = raceIdToVenue(raceId);
 
+      const box =
+        link.closest('.RaceList_DataItem').length ? link.closest('.RaceList_DataItem') :
+        link.closest('li').length ? link.closest('li') :
+        link.closest('div').length ? link.closest('div') :
+        link.parent();
+
       const name =
-        cleanText(item.find('.RaceName').first().text()) ||
-        cleanText(link.text());
+        cleanText(box.find('.RaceName').first().text()) ||
+        cleanText(link.text()) ||
+        `レース名不明`;
 
-      const time = cleanText(item.find('.RaceList_Itemtime').first().text());
+      const time =
+        cleanText(box.find('.RaceList_Itemtime').first().text()) ||
+        cleanText(box.text()).match(/\d{1,2}:\d{2}/)?.[0] ||
+        '';
 
-      const data01 = cleanText(item.find('.RaceData01').first().text());
-      const data02 = cleanText(item.find('.RaceData02').first().text());
-      const { surface, distance } = parseSurfaceDistance(data01);
-      const type = judgeRaceType(name, `${data01} ${data02}`, raceNo);
+      const boxText = cleanText(box.text());
+      const { surface, distance } = parseSurfaceDistance(boxText);
+      const type = judgeRaceType(name, boxText, raceNo);
 
       races.push({
         raceId,
@@ -166,8 +189,8 @@ async function fetchRaceList(options = {}) {
         time,
         surface,
         distance,
-        condition: data01,
-        className: data02,
+        condition: boxText,
+        className: type.grade || '',
         runners: '',
         url: `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
         resultUrl: `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
@@ -179,10 +202,16 @@ async function fetchRaceList(options = {}) {
   races.sort((a, b) => {
     const d = String(a.date).localeCompare(String(b.date));
     if (d !== 0) return d;
+
     const v = String(a.venue).localeCompare(String(b.venue), 'ja');
     if (v !== 0) return v;
+
     return Number(a.raceNo || 0) - Number(b.raceNo || 0);
   });
+
+  if (races.length === 0 && errors.length > 0) {
+    throw new Error(`レース一覧を取得できませんでした。\n${errors.join('\n')}`);
+  }
 
   return races;
 }
@@ -284,6 +313,7 @@ async function fetchResult(race) {
 
     const rank = cells[0];
     const number = cells[2] || cells[1];
+
     const name =
       cleanText(row.find('.Horse_Name, .HorseName').first().text()) ||
       cells.find(c => c && !/^\d+$/.test(c)) ||
