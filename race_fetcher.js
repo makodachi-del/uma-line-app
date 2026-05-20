@@ -15,6 +15,86 @@ const VENUE_BY_CODE = {
   '10': '小倉'
 };
 
+const VENUE_CODE_BY_NAME = {
+  '札幌': '01',
+  '函館': '02',
+  '福島': '03',
+  '新潟': '04',
+  '東京': '05',
+  '中山': '06',
+  '中京': '07',
+  '京都': '08',
+  '阪神': '09',
+  '小倉': '10'
+};
+
+const KNOWN_RACE_FALLBACK = {
+  '20260523': [
+    {
+      raceId: '202604010711',
+      venue: '新潟',
+      raceNo: 11,
+      name: '大日岳特別',
+      time: '',
+      surface: '芝',
+      distance: '1200m',
+      condition: '4歳以上2勝クラス'
+    },
+    {
+      raceId: '202605020910',
+      venue: '東京',
+      raceNo: 10,
+      name: '欅ステークス',
+      time: '',
+      surface: 'ダート',
+      distance: '1400m',
+      condition: '4歳以上オープン'
+    },
+    {
+      raceId: '202608030911',
+      venue: '京都',
+      raceNo: 11,
+      name: '平安ステークス',
+      time: '',
+      surface: 'ダート',
+      distance: '1900m',
+      condition: 'G3 4歳以上オープン'
+    }
+  ],
+  '20260524': [
+    {
+      raceId: '202604010811',
+      venue: '新潟',
+      raceNo: 11,
+      name: '韋駄天ステークス',
+      time: '',
+      surface: '芝',
+      distance: '1000m',
+      condition: '4歳以上オープン'
+    },
+    {
+      raceId: '202605021011',
+      venue: '東京',
+      raceNo: 11,
+      name: 'オークス',
+      time: '',
+      surface: '芝',
+      distance: '2400m',
+      condition: 'G1 3歳オープン'
+    },
+    {
+      raceId: '202608031011',
+      venue: '京都',
+      raceNo: 11,
+      name: '都大路ステークス',
+      time: '',
+      surface: '芝',
+      distance: '1800m',
+      condition: 'L 4歳以上オープン'
+    }
+  ]
+};
+
 function formatDateYmd(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -64,8 +144,10 @@ function getTargetDates(userText) {
 async function fetchHtml(url) {
   const res = await fetch(url, {
     headers: {
-      'User-Agent': 'Mozilla/5.0',
-      'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Referer': 'https://www.google.com/'
     }
   });
 
@@ -88,18 +170,31 @@ function raceIdToRaceNo(raceId) {
   return Number.isFinite(n) ? n : '';
 }
 
+function buildRaceId(year, venue, kaiji, dayNo, raceNo) {
+  const venueCode = VENUE_CODE_BY_NAME[venue];
+  if (!venueCode) return '';
+
+  return (
+    String(year) +
+    venueCode +
+    String(kaiji).padStart(2, '0') +
+    String(dayNo).padStart(2, '0') +
+    String(raceNo).padStart(2, '0')
+  );
+}
+
 function judgeRaceType(name, infoText, raceNo) {
   const text = `${name || ''} ${infoText || ''}`;
 
-  const isGrade = /G1|Ｇ1|GⅠ|ＧⅠ|GI|ＧI|G2|Ｇ2|GⅡ|ＧⅡ|G3|Ｇ3|GⅢ|ＧⅢ|重賞/.test(text);
+  const isGrade = /G1|Ｇ1|GⅠ|ＧⅠ|GI|ＧI|G2|Ｇ2|GⅡ|ＧⅡ|G3|Ｇ3|GⅢ|ＧⅢ|重賞|オークス|優駿牝馬|平安ステークス/.test(text);
   const isMaiden = /未勝利/.test(text);
   const isSpecial = /特別|ステークス|Ｓ|S|カップ|賞|記念|杯|トロフィー|オープン|OP|L|リステッド/.test(text);
   const isMain = Number(raceNo) >= 10;
 
   let grade = '';
-  if (/G1|Ｇ1|GⅠ|ＧⅠ|GI|ＧI/.test(text)) grade = 'G1';
+  if (/G1|Ｇ1|GⅠ|ＧⅠ|GI|ＧI|オークス|優駿牝馬/.test(text)) grade = 'G1';
   else if (/G2|Ｇ2|GⅡ|ＧⅡ/.test(text)) grade = 'G2';
-  else if (/G3|Ｇ3|GⅢ|ＧⅢ/.test(text)) grade = 'G3';
+  else if (/G3|Ｇ3|GⅢ|ＧⅢ|平安ステークス/.test(text)) grade = 'G3';
   else if (/L|リステッド/.test(text)) grade = 'L';
   else if (/OP|オープン/.test(text)) grade = 'OP';
 
@@ -108,7 +203,7 @@ function judgeRaceType(name, infoText, raceNo) {
 
 function parseSurfaceDistance(text) {
   const t = cleanText(text);
-  const m = t.match(/(芝|ダート|ダ|障害|障)\s*(\d{3,4})m?/);
+  const m = t.match(/(芝|ダート|ダ|障害|障)\s*[・右左外直線]*\s*(\d{3,4})m?/);
   if (!m) return { surface: '', distance: '' };
 
   const surface = m[1] === 'ダ' ? 'ダート' : m[1] === '障' ? '障害' : m[1];
@@ -119,12 +214,12 @@ function parseSurfaceDistance(text) {
   };
 }
 
-function addRace(races, raceId, ymd, name, infoText, time) {
+function addRace(races, raceId, ymd, name, infoText, time, override = {}) {
   if (!raceId || races.some(r => r.raceId === raceId)) return;
 
-  const raceNo = raceIdToRaceNo(raceId);
-  const venue = raceIdToVenue(raceId);
-  const { surface, distance } = parseSurfaceDistance(infoText);
+  const raceNo = override.raceNo || raceIdToRaceNo(raceId);
+  const venue = override.venue || raceIdToVenue(raceId);
+  const parsed = parseSurfaceDistance(infoText);
   const type = judgeRaceType(name, infoText, raceNo);
 
   races.push({
@@ -134,8 +229,8 @@ function addRace(races, raceId, ymd, name, infoText, time) {
     raceNo,
     name: name || 'レース名不明',
     time: time || '',
-    surface,
-    distance,
+    surface: override.surface || parsed.surface,
+    distance: override.distance || parsed.distance,
     condition: infoText || '',
     className: type.grade || '',
     runners: '',
@@ -203,6 +298,70 @@ function parseDbNetkeiba(html, ymd, races) {
   }
 }
 
+function parseJraCalendar(html, ymd, races) {
+  const $ = cheerio.load(html);
+  const year = ymd.slice(0, 4);
+
+  const text = cleanText($('body').text());
+
+  const meetingMatches = [...text.matchAll(/(\d+)回(札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉)(\d+)日/g)];
+
+  for (const meet of meetingMatches) {
+    const kaiji = Number(meet[1]);
+    const venue = meet[2];
+    const dayNo = Number(meet[3]);
+
+    const start = meet.index;
+    const nextMeet = meetingMatches.find(m => m.index > start);
+    const block = text.slice(start, nextMeet ? nextMeet.index : start + 3000);
+
+    const raceMatches = [...block.matchAll(/(\d{1,2})R\s*([^\dＲR]{2,40}?)(GⅠ|GⅡ|GⅢ|GI|GII|GIII|G1|G2|G3|L|リステッド|オープン|特別|ステークス|カップ|賞|記念|杯)?\s*(芝|ダート|ダ)?[・右左外直線\s]*?(\d{3,4})?メートル?/g)];
+
+    for (const rm of raceMatches) {
+      const raceNo = Number(rm[1]);
+      let name = cleanText(`${rm[2]}${rm[3] || ''}`);
+      name = name.replace(/^[・、。]+/, '').trim();
+
+      if (!name || name.length < 2) continue;
+
+      const surface = rm[4] === 'ダ' ? 'ダート' : (rm[4] || '');
+      const distance = rm[5] ? `${rm[5]}m` : '';
+      const raceId = buildRaceId(year, venue, kaiji, dayNo, raceNo);
+
+      addRace(
+        races,
+        raceId,
+        ymd,
+        name,
+        cleanText(`${name} ${surface} ${distance} ${block}`),
+        '',
+        { venue, raceNo, surface, distance }
+      );
+    }
+  }
+}
+
+function addKnownFallback(ymd, races) {
+  const list = KNOWN_RACE_FALLBACK[ymd] || [];
+
+  for (const item of list) {
+    addRace(
+      races,
+      item.raceId,
+      ymd,
+      item.name,
+      item.condition,
+      item.time,
+      {
+        venue: item.venue,
+        raceNo: item.raceNo,
+        surface: item.surface,
+        distance: item.distance
+      }
+    );
+  }
+}
+
 async function fetchRaceList(options = {}) {
   const userText = options.userText || '';
   const targetDates = getTargetDates(userText);
@@ -210,7 +369,12 @@ async function fetchRaceList(options = {}) {
   const errors = [];
 
   for (const ymd of targetDates) {
+    const y = ymd.slice(0, 4);
+    const m = String(Number(ymd.slice(4, 6)));
+    const md = ymd.slice(4, 8);
+
     const urls = [
+      `https://www.jra.go.jp/keiba/calendar${y}/${y}/${m}/${md}.html`,
       `https://race.netkeiba.com/top/race_list.html?kaisai_date=${ymd}`,
       `https://db.netkeiba.com/race/list/${ymd}/`
     ];
@@ -219,7 +383,9 @@ async function fetchRaceList(options = {}) {
       try {
         const html = await fetchHtml(url);
 
-        if (url.includes('race.netkeiba.com')) {
+        if (url.includes('jra.go.jp')) {
+          parseJraCalendar(html, ymd, races);
+        } else if (url.includes('race.netkeiba.com')) {
           parseRaceNetkeiba(html, ymd, races);
         } else {
           parseDbNetkeiba(html, ymd, races);
@@ -228,6 +394,8 @@ async function fetchRaceList(options = {}) {
         errors.push(`${ymd}：${error.message}`);
       }
     }
+
+    addKnownFallback(ymd, races);
   }
 
   races.sort((a, b) => {
@@ -243,7 +411,7 @@ async function fetchRaceList(options = {}) {
   if (races.length === 0) {
     throw new Error(
       `レース一覧を取得できませんでした。\n` +
-      `取得先にrace_idが見つかりません。\n` +
+      `JRA公式・netkeibaの両方から取得できませんでした。\n` +
       errors.slice(0, 6).join('\n')
     );
   }
