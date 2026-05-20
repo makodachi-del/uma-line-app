@@ -1,33 +1,68 @@
 async function saveToSheet(payload) {
-  const url = process.env.GOOGLE_SHEET_WEBHOOK_URL;
-  if (!url) return { ok: false, skipped: true, reason: 'GOOGLE_SHEET_WEBHOOK_URL未設定' };
+  const url = process.env.SHEET_API_URL;
+
+  if (!url) {
+    return { ok: false, text: 'SHEET_API_URL未設定のため保存していません。' };
+  }
+
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'save',
+        app: 'umapyon-ai',
+        ...payload
+      })
     });
+
     const text = await res.text();
-    return { ok: res.ok, status: res.status, text };
-  } catch (e) {
-    return { ok: false, error: e.message };
+
+    if (!res.ok) {
+      return { ok: false, text, error: text };
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { ok: true, text };
+    }
+  } catch (error) {
+    return { ok: false, error: error.message, text: error.message };
   }
 }
 
-function buildSheetPayload({ type, userText, aiReply, race }) {
-  return {
-    type: type || '',
-    userText: userText || '',
-    aiReply: aiReply || '',
-    targetDate: race?.date || '',
-    racecourse: race?.course || '',
-    raceName: race?.name || '',
-    marks: '',
-    bets: '',
-    result: '',
-    hit: '',
-    memo: race?.fetchError || ''
-  };
+async function getSheetSummary() {
+  const url = process.env.SHEET_API_URL;
+
+  if (!url) {
+    return { ok: false, text: 'SHEET_API_URL未設定です。' };
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'summary', app: 'umapyon-ai' })
+    });
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      return { ok: false, text };
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { ok: true, text };
+    }
+  } catch (error) {
+    return { ok: false, text: error.message };
+  }
 }
 
-module.exports = { saveToSheet, buildSheetPayload };
+module.exports = {
+  saveToSheet,
+  getSheetSummary
+};
