@@ -1,190 +1,315 @@
 const cheerio = require('cheerio');
-const { venueFromRaceId, JRA_COURSE_EN_TO_JP } = require('./race_rules');
-const { normalizeText } = require('./utils');
+const { getNowJstDate, cleanText } = require('./utils');
+const { rangeFromText } = require('./race_rules');
 
-const BASE = 'https://en.netkeiba.com';
-const LIST_URL = `${BASE}/race/race_list.html`;
+const VENUE_BY_CODE = {
+  '01': '札幌',
+  '02': '函館',
+  '03': '福島',
+  '04': '新潟',
+  '05': '東京',
+  '06': '中山',
+  '07': '中京',
+  '08': '京都',
+  '09': '阪神',
+  '10': '小倉'
+};
+
+function formatDateYmd(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}${m}${d}`;
+}
+
+function formatDateTextFromYmd(ymd) {
+  return `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`;
+}
+
+function addDays(base, days) {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function getSaturdayOfWeek(base) {
+  const d = new Date(base);
+  const day = d.getDay();
+  const diff = 6 - day;
+  return addDays(d, diff);
+}
+
+function getTargetDates(userText) {
+  const mode = rangeFromText(userText);
+  const today = getNowJstDate();
+
+  if (mode === 'today') return [formatDateYmd(today)];
+  if (mode === 'tomorrow') return [formatDateYmd(addDays(today, 1))];
+
+  if (mode === 'this_week') {
+    const sat = getSaturdayOfWeek(today);
+    const sun = addDays(sat, 1);
+    return [formatDateYmd(sat), formatDateYmd(sun)];
+  }
+
+  if (mode === 'next_week') {
+    const sat = addDays(getSaturdayOfWeek(today), 7);
+    const sun = addDays(sat, 1);
+    return [formatDateYmd(sat), formatDateYmd(sun)];
+  }
+
+  return [formatDateYmd(today)];
+}
 
 async function fetchHtml(url) {
   const res = await fetch(url, {
     headers: {
-      'user-agent': 'Mozilla/5.0 uma-line-app/2.0',
-      'accept-language': 'ja,en-US;q=0.9,en;q=0.8',
-    },
+      'User-Agent': 'Mozilla/5.0 umapyon-ai',
+      'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
+    }
   });
-  if (!res.ok) throw new Error(`取得失敗 ${res.status}: ${url}`);
+
+  if (!res.ok) {
+    throw new Error(`取得失敗：${res.status} ${url}`);
+  }
+
   return await res.text();
 }
 
-function absUrl(href) {
-  if (!href) return '';
-  if (href.startsWith('http')) return href;
-  return BASE + href;
+function raceIdToVenue(raceId) {
+  const code = String(raceId || '').slice(4, 6);
+  return VENUE_BY_CODE[code] || '';
 }
 
-function extractRaceId(href) {
-  const m = String(href || '').match(/race_id=(\d{12})/);
-  return m ? m[1] : '';
+function raceIdToRaceNo(raceId) {
+  const n = Number(String(raceId || '').slice(-2));
+  return Number.isFinite(n) ? n : '';
 }
 
-function parseRaceAnchorText(text) {
-  const s = normalizeText(text).replace(/４/g,'4');
-  const m = s.match(/R(\d{1,2})\s+(.+?)\s+(?:(G1|G2|G3|L|OP|\d\s*Win|ALW|Maiden|Open Class|Newcomer)\s+)?(\d{1,2}:\d{2})\s+([TDJ])(\d{3,4})m.*?(\d+)\s*Rnrs/i);
-  if (!m) return null;
-  return {
-    raceNo: Number(m[1]),
-    name: normalizeText(m[2]),
-    grade: m[3] || '',
-    time: m[4],
-    surface: m[5].toUpperCase() === 'T' ? '芝' : m[5].toUpperCase() === 'D' ? 'ダート' : '障害',
-    distance: Number(m[6]),
-    runners: Number(m[7]),
-    condition: `${m[5].toUpperCase()}${m[6]}m ${m[3] || ''}`.trim(),
-  };
+function judgeRaceType(name, infoText, raceNo) {
+  const text = `${name || ''} ${infoText || ''}`;
+
+  const isGrade = /G1|Ｇ1|GⅠ|ＧⅠ|GI|ＧI|G2|Ｇ2|GⅡ|ＧⅡ|G3|Ｇ3|GⅢ|ＧⅢ|重賞/.test(text);
+  const isMaiden = /未勝利/.test(text);
+  const isSpecial = /特別|ステークス|Ｓ|S|カップ|賞|記念|杯|トロフィー|オープン|OP|L|リステッド/.test(text);
+  const isMain = Number(raceNo) >= 10;
+
+  let grade = '';
+  if (/G1|Ｇ1|GⅠ|ＧⅠ|GI|ＧI/.test(text)) grade = 'G1';
+  else if (/G2|Ｇ2|GⅡ|ＧⅡ/.test(text)) grade = 'G2';
+  else if (/G3|Ｇ3|GⅢ|ＧⅢ/.test(text)) grade = 'G3';
+  else if (/L|リステッド/.test(text)) grade = 'L';
+  else if (/OP|オープン/.test(text)) grade = 'OP';
+
+  return { isGrade, isMaiden, isSpecial, isMain, grade };
 }
 
-function parseRaceList(html) {
-  const $ = cheerio.load(html);
+function parseSurfaceDistance(text) {
+  const t = cleanText(text);
+  const m = t.match(/(芝|ダート|ダ|障害|障)\s*(\d{3,4})m?/);
+
+  if (!m) {
+    return { surface: '', distance: '' };
+  }
+
+  const surface = m[1] === 'ダ' ? 'ダート' : m[1] === '障' ? '障害' : m[1];
+  return { surface, distance: `${m[2]}m` };
+}
+
+async function fetchRaceList(options = {}) {
+  const userText = options.userText || '';
+  const targetDates = getTargetDates(userText);
   const races = [];
-  const seen = new Set();
-  $('a[href*="shutuba.html?race_id="]').each((_, a) => {
-    const href = $(a).attr('href');
-    const raceId = extractRaceId(href);
-    if (!raceId || seen.has(raceId)) return;
-    const text = normalizeText($(a).text());
-    if (!/^R\d+\s+/.test(text)) return;
-    const parsed = parseRaceAnchorText(text);
-    if (!parsed) return;
-    seen.add(raceId);
-    races.push({
-      raceId,
-      date: raceId.slice(0,4) + '-' + raceId.slice(4,6) + '-' + raceId.slice(6,8),
-      venue: venueFromRaceId(raceId),
-      fieldUrl: absUrl(href),
-      fullFormUrl: `${BASE}/race/newspaper.html?race_id=${raceId}`,
-      oddsUrl: `${BASE}/race/odds.html?race_id=${raceId}`,
-      resultUrl: `${BASE}/race/result.html?race_id=${raceId}`,
-      ...parsed,
-    });
+
+  for (const ymd of targetDates) {
+    const url = `https://race.netkeiba.com/top/race_list.html?kaisai_date=${ymd}`;
+
+    let html = '';
+    try {
+      html = await fetchHtml(url);
+    } catch {
+      continue;
+    }
+
+    const $ = cheerio.load(html);
+
+    const items = $('.RaceList_DataItem').toArray();
+
+    for (const el of items) {
+      const item = $(el);
+      const link = item.find('a[href*="race_id="]').first();
+      const href = link.attr('href') || '';
+      const raceIdMatch = href.match(/race_id=(\d{12})/);
+      if (!raceIdMatch) continue;
+
+      const raceId = raceIdMatch[1];
+      const raceNo = raceIdToRaceNo(raceId);
+      const venue = raceIdToVenue(raceId);
+
+      const name =
+        cleanText(item.find('.RaceName').first().text()) ||
+        cleanText(link.text());
+
+      const time = cleanText(item.find('.RaceList_Itemtime').first().text());
+
+      const data01 = cleanText(item.find('.RaceData01').first().text());
+      const data02 = cleanText(item.find('.RaceData02').first().text());
+      const { surface, distance } = parseSurfaceDistance(data01);
+      const type = judgeRaceType(name, `${data01} ${data02}`, raceNo);
+
+      races.push({
+        raceId,
+        date: formatDateTextFromYmd(ymd),
+        venue,
+        raceNo,
+        name,
+        time,
+        surface,
+        distance,
+        condition: data01,
+        className: data02,
+        runners: '',
+        url: `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
+        resultUrl: `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
+        ...type
+      });
+    }
+  }
+
+  races.sort((a, b) => {
+    const d = String(a.date).localeCompare(String(b.date));
+    if (d !== 0) return d;
+    const v = String(a.venue).localeCompare(String(b.venue), 'ja');
+    if (v !== 0) return v;
+    return Number(a.raceNo || 0) - Number(b.raceNo || 0);
   });
-  return races.sort((a,b) => String(a.raceId).localeCompare(String(b.raceId)) || a.raceNo - b.raceNo);
+
+  return races;
 }
 
-async function fetchRaceList() {
-  const html = await fetchHtml(LIST_URL);
-  return parseRaceList(html);
-}
+async function findRaceByUserText(userText, races) {
+  const t = cleanText(userText).replace(/予想|結果/g, '');
+  const list = Array.isArray(races) ? races : [];
 
-function parseHeader($) {
-  const body = $('body').text();
-  const lines = body.split('\n').map(normalizeText).filter(Boolean);
-  let headerLine = '';
-  for (let i=0;i<lines.length;i++) {
-    if (/^R\d+$/.test(lines[i]) && /^(G1|G2|G3|L|OP)?$/.test(lines[i+1] || '')) {
-      headerLine = `${lines[i]} ${lines[i+1] || ''} ${lines[i+2] || ''} ${lines[i+3] || ''}`;
-      break;
-    }
+  if (/^\d{1,2}$/.test(t)) {
+    const idx = Number(t) - 1;
+    return list[idx] || null;
   }
-  return headerLine || lines.slice(90, 100).join(' ');
-}
 
-function parseHorsesFromFullForm(html) {
-  const $ = cheerio.load(html);
-  const lines = $('body').text().split('\n').map(normalizeText).filter(Boolean);
-  const horses = [];
-  for (let i=0; i<lines.length; i++) {
-    const line = lines[i];
-    const m = line.match(/^(\d+)\s+(\d+)\s+(.+?)\s+(\d+[A-Z])\s+([\d.]+)\s+(.+)$/);
-    if (!m) continue;
-    const horse = {
-      bracket: Number(m[1]),
-      number: Number(m[2]),
-      name: normalizeText(m[3]),
-      ageSex: m[4],
-      weight: m[5],
-      jockey: normalizeText(m[6]),
-      trainer: normalizeText(lines[i+1] || '不明'),
-      recentStarts: [],
-    };
-    let j=i+1;
-    while (j < lines.length && !/^(\d+)\s+(\d+)\s+.+?\s+(\d+[A-Z])\s+([\d.]+)\s+/.test(lines[j])) {
-      if (/Recent Starts/i.test(lines[j])) {
-        j++;
-        continue;
-      }
-      if (/^\d{2}\s+[A-Z][a-z]{2}\s+\d{2}/.test(lines[j]) || /^\d{2}\s+[A-Z]{3}/.test(lines[j])) {
-        const dateRace = lines[j];
-        const finish = lines[j+1] || '';
-        const detail = lines[j+2] || '';
-        horse.recentStarts.push(normalizeText(`${dateRace} / ${finish} / ${detail}`));
-        j += 3;
-        continue;
-      }
-      j++;
-    }
-    horses.push(horse);
-  }
-  const unique = [];
-  const seen = new Set();
-  for (const h of horses) {
-    if (!seen.has(h.number)) { seen.add(h.number); unique.push(h); }
-  }
-  return unique.sort((a,b)=>a.number-b.number);
-}
+  const compact = t.replace(/\s/g, '');
 
-function parsePaceFromField(html) {
-  const $ = cheerio.load(html);
-  const text = $('body').text();
-  const idx = text.indexOf('PREDICTED PACE');
-  if (idx < 0) return '不明';
-  return normalizeText(text.slice(idx, idx + 1400));
+  return (
+    list.find(r => String(r.name || '').replace(/\s/g, '').includes(compact)) ||
+    list.find(r => compact.includes(String(r.name || '').replace(/\s/g, ''))) ||
+    list.find(r => `${r.venue}${r.raceNo}R` === compact) ||
+    null
+  );
 }
 
 async function fetchRaceDetail(race) {
-  const fieldHtml = await fetchHtml(race.fieldUrl);
-  const fullHtml = await fetchHtml(race.fullFormUrl);
-  const $ = cheerio.load(fullHtml);
-  const horses = parseHorsesFromFullForm(fullHtml);
-  const enoughHorseCount = horses.filter(h => (h.recentStarts || []).length >= 3).length;
+  if (!race || !race.raceId) {
+    throw new Error('レース情報がありません。');
+  }
+
+  const url = `https://race.netkeiba.com/race/shutuba.html?race_id=${race.raceId}`;
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+
+  const horses = [];
+
+  $('tr.HorseList').each((_, el) => {
+    const row = $(el);
+
+    const number = cleanText(row.find('.Umaban').first().text());
+    const bracket = cleanText(row.find('.Waku').first().text());
+    const name = cleanText(row.find('.HorseName').first().text());
+    const ageSex = cleanText(row.find('.Barei').first().text());
+    const weight = cleanText(row.find('.Weight').first().text());
+    const jockey = cleanText(row.find('.Jockey').first().text());
+    const trainer = cleanText(row.find('.Trainer').first().text());
+    const odds = cleanText(row.find('.Odds').first().text());
+    const popularity = cleanText(row.find('.Popular').first().text());
+
+    if (!name) return;
+
+    horses.push({
+      number,
+      bracket,
+      name,
+      ageSex,
+      weight,
+      jockey,
+      trainer,
+      odds: odds || '不明',
+      popularity: popularity || '不明',
+      recentStarts: []
+    });
+  });
+
+  const header = cleanText($('.RaceData01').first().text());
+  const subHeader = cleanText($('.RaceData02').first().text());
+  const { surface, distance } = parseSurfaceDistance(header);
+
   return {
     ...race,
-    header: parseHeader($),
-    paceText: parsePaceFromField(fieldHtml),
-    horses,
+    url,
+    header,
+    subHeader,
+    surface: race.surface || surface,
+    distance: race.distance || distance,
     horseCountParsed: horses.length,
-    enoughHorseCount,
-    hasEnoughForm: horses.length >= 3 && enoughHorseCount >= Math.min(3, horses.length),
-    source: 'en.netkeiba.com',
+    enoughHorseCount: horses.length,
+    hasEnoughForm: horses.length > 0,
+    paceText: '展開は取得済み出走馬データから推定してください。不明情報は作らないでください。',
+    horses
   };
 }
 
 async function fetchResult(race) {
-  const html = await fetchHtml(race.resultUrl || `${BASE}/race/result.html?race_id=${race.raceId}`);
-  const $ = cheerio.load(html);
-  const lines = $('body').text().split('\n').map(normalizeText).filter(Boolean);
-  const resultLines = [];
-  for (const line of lines) {
-    if (/^(1|2|3|4|5)\s+\d+\s+/.test(line)) resultLines.push(line);
+  if (!race || !race.raceId) {
+    throw new Error('レース情報がありません。');
   }
-  return {
-    raceId: race.raceId,
-    raceName: race.name,
-    topLines: resultLines.slice(0, 5),
-    rawSummary: resultLines.length ? resultLines.slice(0, 10).join('\n') : '結果未確認または取得不可',
-  };
-}
 
-async function findRaceByUserText(userText, races) {
-  const t = normalizeText(userText).toLowerCase();
-  const no = t.match(/^(\d{1,2})$/);
-  if (no) return races[Number(no[1])-1] || null;
-  return races.find(r => t.includes(String(r.name || '').toLowerCase()) || String(r.name || '').toLowerCase().includes(t.replace(/予想|結果/g,'').trim())) || null;
+  const url = `https://race.netkeiba.com/race/result.html?race_id=${race.raceId}`;
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+
+  const rows = [];
+
+  $('table.RaceTable01 tr, table.ResultTable tr').each((_, el) => {
+    const row = $(el);
+    const cells = row.find('td').toArray().map(td => cleanText($(td).text()));
+
+    if (cells.length < 3) return;
+
+    const rank = cells[0];
+    const number = cells[2] || cells[1];
+    const name =
+      cleanText(row.find('.Horse_Name, .HorseName').first().text()) ||
+      cells.find(c => c && !/^\d+$/.test(c)) ||
+      '';
+
+    if (!/^\d+$/.test(rank)) return;
+
+    rows.push({ rank, number, name });
+  });
+
+  const top = rows.slice(0, 5);
+
+  const rawSummary = top.length
+    ? top.map(r => `${r.rank}着：${r.number} ${r.name}`).join('\n')
+    : '結果を取得できませんでした。';
+
+  return {
+    rawSummary,
+    rows: top,
+    url
+  };
 }
 
 module.exports = {
   fetchRaceList,
   fetchRaceDetail,
   fetchResult,
-  findRaceByUserText,
-  parseRaceList,
+  findRaceByUserText
 };
