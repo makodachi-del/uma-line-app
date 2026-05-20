@@ -1,4 +1,5 @@
 const cheerio = require('cheerio');
+const iconv = require('iconv-lite');
 const { getNowJstDate, cleanText } = require('./utils');
 const { rangeFromText } = require('./race_rules');
 
@@ -115,13 +116,20 @@ async function fetchHtml(url) {
     }
   });
 
-  const text = await res.text();
+  const arrayBuffer = await res.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
 
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} ${url}`);
   }
 
-  return text;
+  const utf8Text = iconv.decode(buffer, 'utf-8');
+
+  if (!utf8Text.includes('���') && !utf8Text.includes('�')) {
+    return utf8Text;
+  }
+
+  return iconv.decode(buffer, 'euc-jp');
 }
 
 function raceIdToVenue(raceId) {
@@ -371,6 +379,7 @@ function isBadHorseName(name) {
   const n = cleanText(name);
   if (!n) return true;
   if (/^馬名\d+$/.test(n)) return true;
+  if (/�|���/.test(n)) return true;
   if (/馬番|枠|印|人気|オッズ|騎手|調教師|性齢|斤量/.test(n)) return true;
   return false;
 }
@@ -504,14 +513,11 @@ async function fetchRaceDetail(race) {
   }
 
   const url = `https://race.netkeiba.com/race/shutuba.html?race_id=${race.raceId}`;
-  let html = '';
-  let horses = [];
-  let fetchMemo = '';
 
   try {
-    html = await fetchHtml(url);
+    const html = await fetchHtml(url);
     const $ = cheerio.load(html);
-    horses = parseHorseRows($);
+    let horses = parseHorseRows($);
 
     const header = cleanText($('.RaceData01').first().text());
     const subHeader = cleanText($('.RaceData02').first().text());
@@ -521,7 +527,6 @@ async function fetchRaceDetail(race) {
       const fallback = getFallbackHorses(race.raceId);
       if (fallback.length >= 5) {
         horses = fallback;
-        fetchMemo = 'netkeiba馬名取得不足のため固定補助データ使用';
       }
     }
 
@@ -535,9 +540,7 @@ async function fetchRaceDetail(race) {
       horseCountParsed: horses.length,
       enoughHorseCount: horses.length,
       hasEnoughForm: horses.length >= 5,
-      paceText: fetchMemo
-        ? `${fetchMemo}。取得済み馬名だけで推定してください。不明情報は作らないでください。`
-        : '展開は取得済み出走馬データから推定してください。不明情報は作らないでください。',
+      paceText: '取得済み馬名だけで推定してください。不明情報は作らないでください。',
       horses
     };
   } catch (error) {
