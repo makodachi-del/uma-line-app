@@ -431,10 +431,12 @@ function parseHorseRows($) {
 
     const cells = getCellTexts($, row);
 
-    const number =
-      cleanText(row.find('.Umaban').first().text()) ||
-      cleanText(row.find('td.Umaban').first().text()) ||
-      textAt(cells, 1);
+    const numberRaw =
+  cleanText(row.find('.Umaban').first().text()) ||
+  cleanText(row.find('td.Umaban').first().text()) ||
+  textAt(cells, 1);
+
+const number = /^\d{1,2}$/.test(numberRaw) ? numberRaw : '';
 
     const bracket =
       cleanText(row.find('.Waku').first().text()) ||
