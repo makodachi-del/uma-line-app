@@ -334,11 +334,11 @@ async function handlePrediction(userText, userId = 'default') {
 
   const detail = await fetchRaceDetail(race);
 
-  if (!detail.hasEnoughForm) {
+  if (!detail.hasEnoughForm || !Array.isArray(detail.horses) || detail.horses.length === 0) {
     const msg =
       `■ ${detail.venue}${detail.raceNo}R ${detail.name}\n` +
-      `本格予想に必要な出走馬情報を取得できませんでした。\n` +
-      `不明情報は作らないため、予想は出しません。`;
+      `出走馬名を取得できなかったため、予想できませんでした。\n` +
+      `Render Logsで horseCountParsed を確認してください。`;
 
     await saveToSheet({
       type: 'predict_unavailable',
@@ -347,7 +347,7 @@ async function handlePrediction(userText, userId = 'default') {
       targetDate: getTodayJstText(),
       racecourse: detail.venue,
       raceName: detail.name,
-      memo: '出走馬取得不足'
+      memo: `出走馬取得不足 horseCount=${detail.horseCountParsed || 0}`
     });
 
     return msg;
@@ -364,7 +364,7 @@ async function handlePrediction(userText, userId = 'default') {
     raceName: detail.name,
     marks: extractMarks(aiReply),
     bets: extractBets(aiReply),
-    memo: `raceId=${detail.raceId}`
+    memo: `raceId=${detail.raceId} horseCount=${detail.horseCountParsed || detail.horses.length}`
   });
 
   return aiReply;
@@ -372,13 +372,13 @@ async function handlePrediction(userText, userId = 'default') {
 
 async function generatePrediction(detail) {
   const compactHorses = detail.horses.map(h => ({
-    number: h.number,
-    name: h.name,
-    bracket: h.bracket,
-    ageSex: h.ageSex,
-    weight: h.weight,
-    jockey: h.jockey,
-    trainer: h.trainer,
+    number: h.number || '不明',
+    name: h.name || '不明',
+    bracket: h.bracket || '不明',
+    ageSex: h.ageSex || '不明',
+    weight: h.weight || '不明',
+    jockey: h.jockey || '不明',
+    trainer: h.trainer || '不明',
     popularity: h.popularity || '不明',
     odds: h.odds || '不明',
     recentStarts: Array.isArray(h.recentStarts) ? h.recentStarts.slice(0, 5) : []
@@ -389,7 +389,10 @@ async function generatePrediction(detail) {
   const user =
     `現在日付：${getTodayJstText()}\n` +
     `以下の取得済みデータだけで、うまぴょんAIとして予想してください。\n` +
-    `不明情報は作らないでください。\n\n` +
+    `不明情報は作らないでください。\n` +
+    `ただし、馬名が取得できている場合は、騎手・調教師・人気・オッズ・近走が不明でも予想を中止しないでください。\n` +
+    `不明な項目は「不明」と明記し、取得できた情報だけで印と買い目候補を出してください。\n` +
+    `「情報不足なので予想できません」という返答は禁止です。\n\n` +
     `レース情報：${JSON.stringify({
       raceId: detail.raceId,
       date: detail.date,
@@ -402,13 +405,28 @@ async function generatePrediction(detail) {
       condition: detail.condition,
       runners: detail.runners,
       header: detail.header,
-      subHeader: detail.subHeader
+      subHeader: detail.subHeader,
+      horseCountParsed: detail.horseCountParsed
     }, null, 2)}\n\n` +
     `展開情報：${detail.paceText}\n\n` +
     `出走馬：${JSON.stringify(compactHorses, null, 2)}\n\n` +
-    `出力は、うまぴょんAIの当日予想として見やすく出してください。\n` +
-    `買い目を出す場合は、単勝・複勝・ワイド・三連複の中から選び、500円以内と1000円以内を出してください。\n` +
-    `ただし、無理な購入はすすめず、予想候補として出してください。`;
+    `必ず次の形式で出してください。\n\n` +
+    `【うまぴょんAI予想】\n` +
+    `レース名：\n` +
+    `出走時間：\n` +
+    `条件：\n\n` +
+    `【最終印】\n` +
+    `◎ 馬番 馬名\n` +
+    `○ 馬番 馬名\n` +
+    `▲ 馬番 馬名\n` +
+    `☆ 馬番 馬名\n` +
+    `△ 馬番 馬名\n\n` +
+    `【短い理由】\n` +
+    `取得できた情報だけで、簡単に説明してください。\n\n` +
+    `【買い目候補】\n` +
+    `500円以内：\n` +
+    `1000円以内：\n\n` +
+    `※予想候補です。的中や利益を保証するものではありません。`;
 
   const completion = await openai.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -497,7 +515,8 @@ ${UMA_KNOWLEDGE}
 「うまデータちゃん」と名乗ってはいけません。
 不明情報は作らないでください。
 ユーザーは素人なので、専門用語だけで進めず、わかりやすく答えてください。
-レース情報が取得できない場合は、取得できないと正直に伝えてください。
+馬名が取得できている場合は、騎手・調教師・人気・オッズ・近走が不明でも予想を中止しないでください。
+不明な項目は「不明」と明記し、取得済みの情報だけで予想してください。
 `;
 }
 
