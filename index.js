@@ -1,3 +1,4 @@
+
 const express = require('express');
 const line = require('@line/bot-sdk');
 const OpenAI = require('openai');
@@ -163,6 +164,15 @@ function hasCachedRaceList(userId) {
   return cached && Array.isArray(cached.races) && cached.races.length > 0;
 }
 
+function setFixedGradeCache(userId) {
+  userLastLists.set(userId, {
+    mode: 'grade',
+    races: FIXED_THIS_WEEK_GRADE_RACES,
+    savedAt: Date.now(),
+    userText: '今週の重賞'
+  });
+}
+
 function formatFixedThisWeekGradeList() {
   return (
     `うまぴょんAIです。\n` +
@@ -177,12 +187,7 @@ function formatFixedThisWeekGradeList() {
 }
 
 async function handleFixedThisWeekGrade(userText, userId) {
-  userLastLists.set(userId, {
-    mode: 'grade',
-    races: FIXED_THIS_WEEK_GRADE_RACES,
-    savedAt: Date.now(),
-    userText
-  });
+  setFixedGradeCache(userId);
 
   const reply = formatFixedThisWeekGradeList();
 
@@ -213,7 +218,10 @@ async function handleUserText(userText, userId = 'default') {
     return await handleFixedThisWeekGrade(userText, userId);
   }
 
-  if (isNumberOnly(userText) && hasCachedRaceList(userId)) {
+  if (isNumberOnly(userText)) {
+    if (!hasCachedRaceList(userId)) {
+      setFixedGradeCache(userId);
+    }
     return await handlePrediction(`${userText} 予想`, userId);
   }
 
@@ -303,9 +311,15 @@ async function getTargetRace(userText, preferredMode = 'special_or_above', userI
   const cleaned = String(userText || '').replace(/予想|結果/g, '').trim();
   const cached = userLastLists.get(userId);
 
-  if (/^\d{1,2}$/.test(cleaned) && cached && Array.isArray(cached.races)) {
-    const cachedRace = await findRaceByUserText(cleaned, cached.races);
-    if (cachedRace) return { race: cachedRace, races: cached.races };
+  if (/^\d{1,2}$/.test(cleaned)) {
+    if (cached && Array.isArray(cached.races)) {
+      const cachedRace = await findRaceByUserText(cleaned, cached.races);
+      if (cachedRace) return { race: cachedRace, races: cached.races };
+    }
+
+    const idx = Number(cleaned) - 1;
+    const fixedRace = FIXED_THIS_WEEK_GRADE_RACES[idx] || null;
+    if (fixedRace) return { race: fixedRace, races: FIXED_THIS_WEEK_GRADE_RACES };
   }
 
   const races = await fetchRaceList({ userText });
@@ -324,7 +338,7 @@ async function handlePrediction(userText, userId = 'default') {
     /未勝利/.test(userText) ? 'maiden' :
     /重賞|G1|Ｇ1|GⅠ|ＧⅠ|G2|Ｇ2|GⅡ|ＧⅡ|G3|Ｇ3|GⅢ|ＧⅢ/.test(userText) ? 'grade' :
     /特別/.test(userText) ? 'special_or_above' :
-    'special_or_above';
+    'grade';
 
   const { race } = await getTargetRace(userText, preferredMode, userId);
 
@@ -394,24 +408,13 @@ function hasFakeHorseName(text) {
 function makeSafeFallbackPrediction(detail, validHorses) {
   const picks = validHorses.slice(0, 5);
 
-  while (picks.length < 5) {
-    picks.push({
-      number: '不明',
-      name: '取得不足',
-      jockey: '不明',
-      trainer: '不明',
-      popularity: '不明',
-      odds: '不明'
-    });
-  }
-
   const marks = [
     ['◎', picks[0]],
     ['○', picks[1]],
     ['▲', picks[2]],
     ['☆', picks[3]],
     ['△', picks[4]]
-  ];
+  ].filter(([, h]) => h && h.name);
 
   return (
     `【うまぴょんAI予想】\n` +
@@ -423,13 +426,13 @@ function makeSafeFallbackPrediction(detail, validHorses) {
     `\n\n` +
     `【短い理由】\n` +
     `取得できた出走馬名をもとに、上位5頭を予想候補として並べました。\n` +
-    `騎手・調教師・人気・オッズなどが不明な馬は、不明情報を作らずに評価しています。\n\n` +
+    `不明情報は作らず、取得済みの情報だけで判断しています。\n\n` +
     `【買い目候補】\n` +
     `500円以内：\n` +
-    `・単勝 ${picks[0].number}番 500円\n\n` +
+    `・単勝 ${picks[0]?.number || '不明'}番 500円\n\n` +
     `1000円以内：\n` +
-    `・単勝 ${picks[0].number}番 500円\n` +
-    `・複勝 ${picks[1].number}番 500円\n\n` +
+    `・単勝 ${picks[0]?.number || '不明'}番 500円\n` +
+    `・複勝 ${picks[1]?.number || '不明'}番 500円\n\n` +
     `※予想候補です。的中や利益を保証するものではありません。`
   );
 }
@@ -453,7 +456,6 @@ async function generatePrediction(detail) {
   const user =
     `現在日付：${getTodayJstText()}\n` +
     `以下の取得済みデータだけで、うまぴょんAIとして予想してください。\n\n` +
-
     `【絶対ルール】\n` +
     `・出走馬一覧に存在する馬番と馬名だけを使ってください。\n` +
     `・「馬名1」「馬名2」「馬番 馬名」などの仮名や例文は絶対に使わないでください。\n` +
@@ -461,7 +463,6 @@ async function generatePrediction(detail) {
     `・不明な項目は「不明」と書いてください。\n` +
     `・情報不足を理由に予想拒否しないでください。\n` +
     `・必ず実在する取得済み馬名で、◎○▲☆△を出してください。\n\n` +
-
     `【レース情報】\n` +
     `レース名：${detail.name}\n` +
     `日付：${detail.date || '不明'}\n` +
@@ -471,11 +472,9 @@ async function generatePrediction(detail) {
     `条件：${detail.condition || '不明'}\n` +
     `コース：${detail.surface || '不明'}${detail.distance || ''}\n` +
     `取得馬数：${validHorses.length}\n\n` +
-
     `【出走馬一覧】\n` +
     horseListText +
     `\n\n` +
-
     `【出力形式】\n` +
     `【うまぴょんAI予想】\n` +
     `レース名：${detail.name}\n` +
