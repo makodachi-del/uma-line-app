@@ -293,20 +293,21 @@ async function handlePrediction(userText, userId = 'default') {
   const detail = await fetchRaceDetail(race);
   const horses = getValidHorses(detail);
 
-  if (horses.length === 0) {
+  if (!detail.entryConfirmed || horses.length === 0) {
     const msg =
       `■ ${detail.venue}${detail.raceNo}R ${detail.name}\n` +
-      `出走馬名を取得できませんでした。\n` +
-      `race_fetcher.js を確認してください。`;
+      `出馬表がまだ確定していません。\n` +
+      `馬番が確認できないため、正式な予想はできません。\n` +
+      `出馬表確定後にもう一度送ってください。`;
 
     await saveToSheet({
-      type: 'predict_unavailable',
+      type: 'predict_entry_unconfirmed',
       userText,
       aiReply: msg,
       targetDate: getTodayJstText(),
       racecourse: detail.venue,
       raceName: detail.name,
-      memo: `horseCount=${detail.horseCountParsed || 0}`
+      memo: `entryConfirmed=${detail.entryConfirmed} horseCount=${detail.horseCountParsed || 0}`
     });
 
     return msg;
