@@ -64,7 +64,7 @@ function getTargetDates(userText) {
 async function fetchHtml(url) {
   const res = await fetch(url, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 umapyon-ai',
+      'User-Agent': 'Mozilla/5.0',
       'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
     }
   });
@@ -72,7 +72,7 @@ async function fetchHtml(url) {
   const text = await res.text();
 
   if (!res.ok) {
-    throw new Error(`取得失敗：HTTP ${res.status}\nURL：${url}\n本文先頭：${text.slice(0, 200)}`);
+    throw new Error(`HTTP ${res.status} ${url}`);
   }
 
   return text;
@@ -109,7 +109,6 @@ function judgeRaceType(name, infoText, raceNo) {
 function parseSurfaceDistance(text) {
   const t = cleanText(text);
   const m = t.match(/(芝|ダート|ダ|障害|障)\s*(\d{3,4})m?/);
-
   if (!m) return { surface: '', distance: '' };
 
   const surface = m[1] === 'ダ' ? 'ダート' : m[1] === '障' ? '障害' : m[1];
@@ -120,6 +119,90 @@ function parseSurfaceDistance(text) {
   };
 }
 
+function addRace(races, raceId, ymd, name, infoText, time) {
+  if (!raceId || races.some(r => r.raceId === raceId)) return;
+
+  const raceNo = raceIdToRaceNo(raceId);
+  const venue = raceIdToVenue(raceId);
+  const { surface, distance } = parseSurfaceDistance(infoText);
+  const type = judgeRaceType(name, infoText, raceNo);
+
+  races.push({
+    raceId,
+    date: formatDateTextFromYmd(ymd),
+    venue,
+    raceNo,
+    name: name || 'レース名不明',
+    time: time || '',
+    surface,
+    distance,
+    condition: infoText || '',
+    className: type.grade || '',
+    runners: '',
+    url: `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
+    resultUrl: `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
+    ...type
+  });
+}
+
+function parseRaceNetkeiba(html, ymd, races) {
+  const $ = cheerio.load(html);
+  const links = $('a[href*="race_id="]').toArray();
+
+  for (const el of links) {
+    const link = $(el);
+    const href = link.attr('href') || '';
+    const m = href.match(/race_id=(\d{12})/);
+    if (!m) continue;
+
+    const raceId = m[1];
+
+    const box =
+      link.closest('.RaceList_DataItem').length ? link.closest('.RaceList_DataItem') :
+      link.closest('li').length ? link.closest('li') :
+      link.closest('div').length ? link.closest('div') :
+      link.parent();
+
+    const name =
+      cleanText(box.find('.RaceName').first().text()) ||
+      cleanText(link.text()) ||
+      'レース名不明';
+
+    const boxText = cleanText(box.text());
+    const time =
+      cleanText(box.find('.RaceList_Itemtime').first().text()) ||
+      boxText.match(/\d{1,2}:\d{2}/)?.[0] ||
+      '';
+
+    addRace(races, raceId, ymd, name, boxText, time);
+  }
+}
+
+function parseDbNetkeiba(html, ymd, races) {
+  const $ = cheerio.load(html);
+  const links = $('a[href*="/race/"]').toArray();
+
+  for (const el of links) {
+    const link = $(el);
+    const href = link.attr('href') || '';
+    const m = href.match(/\/race\/(\d{12})/);
+    if (!m) continue;
+
+    const raceId = m[1];
+
+    const row =
+      link.closest('tr').length ? link.closest('tr') :
+      link.closest('li').length ? link.closest('li') :
+      link.parent();
+
+    const name = cleanText(link.text()) || 'レース名不明';
+    const rowText = cleanText(row.text());
+    const time = rowText.match(/\d{1,2}:\d{2}/)?.[0] || '';
+
+    addRace(races, raceId, ymd, name, rowText, time);
+  }
+}
+
 async function fetchRaceList(options = {}) {
   const userText = options.userText || '';
   const targetDates = getTargetDates(userText);
@@ -127,75 +210,23 @@ async function fetchRaceList(options = {}) {
   const errors = [];
 
   for (const ymd of targetDates) {
-    const url = `https://race.netkeiba.com/top/race_list.html?kaisai_date=${ymd}`;
+    const urls = [
+      `https://race.netkeiba.com/top/race_list.html?kaisai_date=${ymd}`,
+      `https://db.netkeiba.com/race/list/${ymd}/`
+    ];
 
-    let html = '';
+    for (const url of urls) {
+      try {
+        const html = await fetchHtml(url);
 
-    try {
-      html = await fetchHtml(url);
-    } catch (error) {
-      errors.push(`${ymd}：${error.message}`);
-      continue;
-    }
-
-    const $ = cheerio.load(html);
-
-    const links = $('a[href*="race_id="]').toArray();
-
-    if (links.length === 0) {
-      errors.push(`${ymd}：race_id付きリンクが見つかりません。HTML構造変更の可能性があります。`);
-      continue;
-    }
-
-    for (const el of links) {
-      const link = $(el);
-      const href = link.attr('href') || '';
-      const raceIdMatch = href.match(/race_id=(\d{12})/);
-      if (!raceIdMatch) continue;
-
-      const raceId = raceIdMatch[1];
-
-      if (races.some(r => r.raceId === raceId)) continue;
-
-      const raceNo = raceIdToRaceNo(raceId);
-      const venue = raceIdToVenue(raceId);
-
-      const box =
-        link.closest('.RaceList_DataItem').length ? link.closest('.RaceList_DataItem') :
-        link.closest('li').length ? link.closest('li') :
-        link.closest('div').length ? link.closest('div') :
-        link.parent();
-
-      const name =
-        cleanText(box.find('.RaceName').first().text()) ||
-        cleanText(link.text()) ||
-        `レース名不明`;
-
-      const time =
-        cleanText(box.find('.RaceList_Itemtime').first().text()) ||
-        cleanText(box.text()).match(/\d{1,2}:\d{2}/)?.[0] ||
-        '';
-
-      const boxText = cleanText(box.text());
-      const { surface, distance } = parseSurfaceDistance(boxText);
-      const type = judgeRaceType(name, boxText, raceNo);
-
-      races.push({
-        raceId,
-        date: formatDateTextFromYmd(ymd),
-        venue,
-        raceNo,
-        name,
-        time,
-        surface,
-        distance,
-        condition: boxText,
-        className: type.grade || '',
-        runners: '',
-        url: `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`,
-        resultUrl: `https://race.netkeiba.com/race/result.html?race_id=${raceId}`,
-        ...type
-      });
+        if (url.includes('race.netkeiba.com')) {
+          parseRaceNetkeiba(html, ymd, races);
+        } else {
+          parseDbNetkeiba(html, ymd, races);
+        }
+      } catch (error) {
+        errors.push(`${ymd}：${error.message}`);
+      }
     }
   }
 
@@ -209,8 +240,12 @@ async function fetchRaceList(options = {}) {
     return Number(a.raceNo || 0) - Number(b.raceNo || 0);
   });
 
-  if (races.length === 0 && errors.length > 0) {
-    throw new Error(`レース一覧を取得できませんでした。\n${errors.join('\n')}`);
+  if (races.length === 0) {
+    throw new Error(
+      `レース一覧を取得できませんでした。\n` +
+      `取得先にrace_idが見つかりません。\n` +
+      errors.slice(0, 6).join('\n')
+    );
   }
 
   return races;
