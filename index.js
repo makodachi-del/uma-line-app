@@ -154,6 +154,15 @@ function isFixedThisWeekGradeRequest(userText) {
   return /今週/.test(t) && /重賞|G1|GⅠ|ＧⅠ|G2|GⅡ|ＧⅡ|G3|GⅢ|ＧⅢ/.test(t) && !/予想|結果|検証|集計/.test(t);
 }
 
+function isNumberOnly(userText) {
+  return /^\d{1,2}$/.test(String(userText || '').trim());
+}
+
+function hasCachedRaceList(userId) {
+  const cached = userLastLists.get(userId);
+  return cached && Array.isArray(cached.races) && cached.races.length > 0;
+}
+
 function formatFixedThisWeekGradeList() {
   return (
     `うまぴょんAIです。\n` +
@@ -202,6 +211,10 @@ async function handleUserText(userText, userId = 'default') {
 
   if (isFixedThisWeekGradeRequest(userText)) {
     return await handleFixedThisWeekGrade(userText, userId);
+  }
+
+  if (isNumberOnly(userText) && hasCachedRaceList(userId)) {
+    return await handlePrediction(`${userText} 予想`, userId);
   }
 
   const mode = modeFromText(userText);
