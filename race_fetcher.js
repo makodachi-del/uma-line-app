@@ -95,8 +95,9 @@ function getTargetDates(userText) {
 async function fetchHtml(url) {
   const res = await fetch(url, {
     headers: {
-      'User-Agent': 'Mozilla/5.0',
-      'Accept-Language': 'ja-JP,ja;q=0.9'
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+      'Accept-Language': 'ja-JP,ja;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
     }
   });
 
@@ -309,111 +310,59 @@ async function findRaceByUserText(userText, races) {
   );
 }
 
-async function fetchRaceDetail(race) {
-  if (!race || !race.raceId) {
-    throw new Error('レース情報がありません。');
-  }
+function getCellTexts($, row) {
+  return row.find('td').toArray().map(td => cleanText($(td).text())).filter(Boolean);
+}
 
-  const url = `https://race.netkeiba.com/race/shutuba.html?race_id=${race.raceId}`;
-  const html = await fetchHtml(url);
-  const $ = cheerio.load(html);
+function textAt(cells, index) {
+  return cleanText(cells[index] || '');
+}
 
+function pickHorseName($, row, cells) {
+  return (
+    cleanText(row.find('.HorseName').first().text()) ||
+    cleanText(row.find('.Horse_Name').first().text()) ||
+    cleanText(row.find('a[href*="/horse/"]').first().text()) ||
+    textAt(cells, 3) ||
+    ''
+  );
+}
+
+function pickJockey($, row, cells) {
+  return (
+    cleanText(row.find('.Jockey').first().text()) ||
+    cleanText(row.find('a[href*="/jockey/"]').first().text()) ||
+    textAt(cells, 6) ||
+    ''
+  );
+}
+
+function pickTrainer($, row, cells) {
+  return (
+    cleanText(row.find('.Trainer').first().text()) ||
+    cleanText(row.find('a[href*="/trainer/"]').first().text()) ||
+    textAt(cells, 7) ||
+    ''
+  );
+}
+
+function parseHorseRows($) {
   const horses = [];
+  const seen = new Set();
 
-  $('tr.HorseList').each((_, el) => {
+  const rows = $(
+    [
+      'tr.HorseList',
+      'table.Shutuba_Table tr',
+      'table.RaceTable01 tr',
+      'table.Nk_Table tr',
+      'tr'
+    ].join(',')
+  ).toArray();
+
+  for (const el of rows) {
     const row = $(el);
+    const rowText = cleanText(row.text());
 
-    const number = cleanText(row.find('.Umaban').first().text());
-    const bracket = cleanText(row.find('.Waku').first().text());
-    const name = cleanText(row.find('.HorseName').first().text());
-    const ageSex = cleanText(row.find('.Barei').first().text());
-    const weight = cleanText(row.find('.Weight').first().text());
-    const jockey = cleanText(row.find('.Jockey').first().text());
-    const trainer = cleanText(row.find('.Trainer').first().text());
-    const odds = cleanText(row.find('.Odds').first().text());
-    const popularity = cleanText(row.find('.Popular').first().text());
-
-    if (!name) return;
-
-    horses.push({
-      number,
-      bracket,
-      name,
-      ageSex,
-      weight,
-      jockey,
-      trainer,
-      odds: odds || '不明',
-      popularity: popularity || '不明',
-      recentStarts: []
-    });
-  });
-
-  const header = cleanText($('.RaceData01').first().text());
-  const subHeader = cleanText($('.RaceData02').first().text());
-  const { surface, distance } = parseSurfaceDistance(header);
-
-  return {
-    ...race,
-    url,
-    header,
-    subHeader,
-    surface: race.surface || surface,
-    distance: race.distance || distance,
-    horseCountParsed: horses.length,
-    enoughHorseCount: horses.length,
-    hasEnoughForm: horses.length > 0,
-    paceText: '展開は取得済み出走馬データから推定してください。不明情報は作らないでください。',
-    horses
-  };
-}
-
-async function fetchResult(race) {
-  if (!race || !race.raceId) {
-    throw new Error('レース情報がありません。');
-  }
-
-  const url = `https://race.netkeiba.com/race/result.html?race_id=${race.raceId}`;
-  const html = await fetchHtml(url);
-  const $ = cheerio.load(html);
-
-  const rows = [];
-
-  $('table.RaceTable01 tr, table.ResultTable tr').each((_, el) => {
-    const row = $(el);
-    const cells = row.find('td').toArray().map(td => cleanText($(td).text()));
-
-    if (cells.length < 3) return;
-
-    const rank = cells[0];
-    const number = cells[2] || cells[1];
-
-    const name =
-      cleanText(row.find('.Horse_Name, .HorseName').first().text()) ||
-      cells.find(c => c && !/^\d+$/.test(c)) ||
-      '';
-
-    if (!/^\d+$/.test(rank)) return;
-
-    rows.push({ rank, number, name });
-  });
-
-  const top = rows.slice(0, 5);
-
-  const rawSummary = top.length
-    ? top.map(r => `${r.rank}着：${r.number} ${r.name}`).join('\n')
-    : '結果を取得できませんでした。';
-
-  return {
-    rawSummary,
-    rows: top,
-    url
-  };
-}
-
-module.exports = {
-  fetchRaceList,
-  fetchRaceDetail,
-  fetchResult,
-  findRaceByUserText
-};
+    if (!rowText) continue;
+    if (!row.find('td').
