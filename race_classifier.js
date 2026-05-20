@@ -9,6 +9,20 @@ function selectTargetRaces(races, mode) {
   return list;
 }
 
+function oneLine(value, fallback = '') {
+  return String(value || fallback)
+    .replace(/\r?\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanRaceName(name) {
+  return oneLine(name, 'レース名不明')
+    .replace(/^\d{1,2}R\s*/g, '')
+    .replace(/\s*\d{1,2}R$/g, '')
+    .trim();
+}
+
 function formatRaceList(races, mode) {
   const list = Array.isArray(races) ? races : [];
 
@@ -26,20 +40,30 @@ function formatRaceList(races, mode) {
   }
 
   const lines = [];
-  lines.push(`うまぴょんAIです。`);
+  lines.push('うまぴょんAIです。');
   lines.push(`${title}の対象レースです。`);
   lines.push('');
 
   list.forEach((r, i) => {
-    lines.push(
-      `${i + 1}. ${r.date || '日付不明'} ${r.venue || '競馬場不明'}${r.raceNo || '?'}R ${r.name || 'レース名不明'}`
-    );
-    lines.push(
-      `   ${r.time || '時刻不明'} / ${r.surface || '条件不明'}${r.distance || ''} / ${r.grade || r.className || '区分不明'}`
-    );
+    const date = oneLine(r.date, '日付不明');
+    const venue = oneLine(r.venue, '競馬場不明');
+    const raceNo = oneLine(r.raceNo, '?');
+    const name = cleanRaceName(r.name);
+    const time = oneLine(r.time, '時刻不明');
+    const surface = oneLine(r.surface, '条件不明');
+    const distance = oneLine(r.distance, '');
+    const grade = oneLine(r.className || r.grade, '区分不明');
+    const runners = oneLine(r.runners, '');
+
+    lines.push(`${i + 1}. ${date} ${venue}${raceNo}R ${name}`);
+
+    let detail = `   ${time} / ${surface}${distance} / ${grade}`;
+    if (runners) detail += ` / ${runners}頭`;
+
+    lines.push(detail);
+    lines.push('');
   });
 
-  lines.push('');
   lines.push('予想したい場合は、番号だけ送ってください。');
   lines.push('例：1');
 
