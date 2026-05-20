@@ -21,18 +21,18 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const lineConfig = {
-  channelSecret: process.env.LINE_CHANNEL_SECRET,
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
-};
-
 const lineClient = new line.messagingApi.MessagingApiClient({
-  channelAccessToken: lineConfig.channelAccessToken
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
 });
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+const lineConfig = {
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
+};
 
 const userLastLists = new Map();
 
@@ -90,32 +90,20 @@ function toText(value) {
 const UMA_PROMPT = toText(UMA_PROMPT_RAW);
 const UMA_KNOWLEDGE = toText(UMA_KNOWLEDGE_RAW);
 
-app.get('/', (_, res) => {
-  res.status(200).send('umapyon-ai is running');
-});
-
-app.get('/health', (_, res) => {
-  res.status(200).json({
-    ok: true,
-    app: 'umapyon-ai',
-    now: getNowJstIsoText()
-  });
-});
+app.get('/', (_, res) => res.status(200).send('umapyon-ai is running'));
+app.get('/health', (_, res) => res.status(200).json({ ok: true, app: 'umapyon-ai', now: getNowJstIsoText() }));
 
 app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
   res.status(200).end();
-
   const events = req.body.events || [];
 
-  await Promise.all(
-    events.map(async event => {
-      try {
-        await handleEvent(event);
-      } catch (error) {
-        console.error('handleEvent error:', error);
-      }
-    })
-  );
+  await Promise.all(events.map(async event => {
+    try {
+      await handleEvent(event);
+    } catch (error) {
+      console.error('handleEvent error:', error);
+    }
+  }));
 });
 
 async function handleEvent(event) {
@@ -126,7 +114,6 @@ async function handleEvent(event) {
   const userId = event.source?.userId || 'default';
 
   let reply = '';
-
   try {
     reply = await handleUserText(userText, userId);
   } catch (error) {
@@ -138,15 +125,8 @@ async function handleEvent(event) {
 }
 
 async function replyLine(replyToken, text) {
-  const messages = splitForLine(text).map(t => ({
-    type: 'text',
-    text: cleanLineReply(t)
-  }));
-
-  await lineClient.replyMessage({
-    replyToken,
-    messages
-  });
+  const messages = splitForLine(text).map(t => ({ type: 'text', text: cleanLineReply(t) }));
+  await lineClient.replyMessage({ replyToken, messages });
 }
 
 function isFixedThisWeekGradeRequest(userText) {
@@ -158,11 +138,6 @@ function isNumberOnly(userText) {
   return /^\d{1,2}$/.test(String(userText || '').trim());
 }
 
-function hasCachedRaceList(userId) {
-  const cached = userLastLists.get(userId);
-  return cached && Array.isArray(cached.races) && cached.races.length > 0;
-}
-
 function setFixedGradeCache(userId) {
   userLastLists.set(userId, {
     mode: 'grade',
@@ -170,6 +145,11 @@ function setFixedGradeCache(userId) {
     savedAt: Date.now(),
     userText: '今週の重賞'
   });
+}
+
+function hasCachedRaceList(userId) {
+  const cached = userLastLists.get(userId);
+  return cached && Array.isArray(cached.races) && cached.races.length > 0;
 }
 
 function formatFixedThisWeekGradeList() {
@@ -187,7 +167,6 @@ function formatFixedThisWeekGradeList() {
 
 async function handleFixedThisWeekGrade(userText, userId) {
   setFixedGradeCache(userId);
-
   const reply = formatFixedThisWeekGradeList();
 
   await saveToSheet({
@@ -204,12 +183,7 @@ async function handleFixedThisWeekGrade(userText, userId) {
 async function handleUserText(userText, userId = 'default') {
   if (userText === 'テスト') {
     const reply = 'うまぴょんAIです。接続OKです。';
-    await saveToSheet({
-      type: 'test',
-      userText,
-      aiReply: reply,
-      targetDate: getTodayJstText()
-    });
+    await saveToSheet({ type: 'test', userText, aiReply: reply, targetDate: getTodayJstText() });
     return reply;
   }
 
@@ -218,9 +192,7 @@ async function handleUserText(userText, userId = 'default') {
   }
 
   if (isNumberOnly(userText)) {
-    if (!hasCachedRaceList(userId)) {
-      setFixedGradeCache(userId);
-    }
+    if (!hasCachedRaceList(userId)) setFixedGradeCache(userId);
     return await handlePrediction(`${userText} 予想`, userId);
   }
 
@@ -234,9 +206,7 @@ async function handleUserText(userText, userId = 'default') {
     return await handleList(userText, mode, userId);
   }
 
-  if (mode === 'predict') {
-    return await handlePrediction(userText, userId);
-  }
+  if (mode === 'predict') return await handlePrediction(userText, userId);
 
   if (isTueToFriNoJraDay() && hasHorseWords(userText) && !/今週|来週|結果|検証|集計|過去/.test(userText)) {
     const fixed =
@@ -244,13 +214,7 @@ async function handleUserText(userText, userId = 'default') {
       `通常、火〜金はJRA開催日ではないため、今日のJRA対象レースはありません。\n` +
       `「今週の重賞」「今週の特別以上」で確認してください。`;
 
-    await saveToSheet({
-      type: 'no_jra_fixed',
-      userText,
-      aiReply: fixed,
-      targetDate: getTodayJstText()
-    });
-
+    await saveToSheet({ type: 'no_jra_fixed', userText, aiReply: fixed, targetDate: getTodayJstText() });
     return fixed;
   }
 
@@ -258,26 +222,17 @@ async function handleUserText(userText, userId = 'default') {
 }
 
 async function handleChat(userText) {
-  const system = buildSystemMessage();
-
   const completion = await openai.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0.3,
     messages: [
-      { role: 'system', content: system },
+      { role: 'system', content: buildSystemMessage() },
       { role: 'user', content: userText }
     ]
   });
 
   const reply = completion.choices?.[0]?.message?.content || 'うまぴょんAIの返事が空でした。';
-
-  await saveToSheet({
-    type: 'chat',
-    userText,
-    aiReply: reply,
-    targetDate: getTodayJstText()
-  });
-
+  await saveToSheet({ type: 'chat', userText, aiReply: reply, targetDate: getTodayJstText() });
   return reply;
 }
 
@@ -286,15 +241,9 @@ async function handleList(userText, mode, userId = 'default') {
   const filtered = filterRacesByMode(races, mode);
   const targets = selectTargetRaces(filtered, mode);
 
-  userLastLists.set(userId, {
-    mode,
-    races: targets,
-    savedAt: Date.now(),
-    userText
-  });
+  userLastLists.set(userId, { mode, races: targets, savedAt: Date.now(), userText });
 
   const reply = formatRaceList(targets, mode);
-
   await saveToSheet({
     type: `list_${mode}`,
     userText,
@@ -306,7 +255,7 @@ async function handleList(userText, mode, userId = 'default') {
   return reply;
 }
 
-async function getTargetRace(userText, preferredMode = 'special_or_above', userId = 'default') {
+async function getTargetRace(userText, preferredMode = 'grade', userId = 'default') {
   const cleaned = String(userText || '').replace(/予想|結果/g, '').trim();
   const cached = userLastLists.get(userId);
 
@@ -316,8 +265,7 @@ async function getTargetRace(userText, preferredMode = 'special_or_above', userI
       if (cachedRace) return { race: cachedRace, races: cached.races };
     }
 
-    const idx = Number(cleaned) - 1;
-    const fixedRace = FIXED_THIS_WEEK_GRADE_RACES[idx] || null;
+    const fixedRace = FIXED_THIS_WEEK_GRADE_RACES[Number(cleaned) - 1] || null;
     if (fixedRace) return { race: fixedRace, races: FIXED_THIS_WEEK_GRADE_RACES };
   }
 
@@ -325,10 +273,7 @@ async function getTargetRace(userText, preferredMode = 'special_or_above', userI
   const filtered = filterRacesByMode(races, preferredMode);
   let race = await findRaceByUserText(cleaned, filtered);
 
-  if (!race) {
-    race = await findRaceByUserText(cleaned, races);
-  }
-
+  if (!race) race = await findRaceByUserText(cleaned, races);
   return { race, races };
 }
 
@@ -346,13 +291,13 @@ async function handlePrediction(userText, userId = 'default') {
   }
 
   const detail = await fetchRaceDetail(race);
-  const validHorses = getValidHorses(detail);
+  const horses = getValidHorses(detail);
 
-  if (validHorses.length === 0) {
+  if (horses.length === 0) {
     const msg =
       `■ ${detail.venue}${detail.raceNo}R ${detail.name}\n` +
       `出走馬名を取得できませんでした。\n` +
-      `race_fetcher.js の補助データが反映されていない可能性があります。`;
+      `race_fetcher.js を確認してください。`;
 
     await saveToSheet({
       type: 'predict_unavailable',
@@ -361,13 +306,13 @@ async function handlePrediction(userText, userId = 'default') {
       targetDate: getTodayJstText(),
       racecourse: detail.venue,
       raceName: detail.name,
-      memo: `出走馬取得不足 horseCount=${detail.horseCountParsed || 0}`
+      memo: `horseCount=${detail.horseCountParsed || 0}`
     });
 
     return msg;
   }
 
-  const aiReply = makeSafeFallbackPrediction(detail, validHorses);
+  const aiReply = makeSafePrediction(detail, horses);
 
   await saveToSheet({
     type: 'prediction',
@@ -378,7 +323,7 @@ async function handlePrediction(userText, userId = 'default') {
     raceName: detail.name,
     marks: extractMarks(aiReply),
     bets: extractBets(aiReply),
-    memo: `raceId=${detail.raceId} horseCount=${validHorses.length}`
+    memo: `raceId=${detail.raceId} horseCount=${horses.length}`
   });
 
   return aiReply;
@@ -390,7 +335,7 @@ function isNumericHorseNumber(value) {
 
 function getValidHorses(detail) {
   return (detail.horses || [])
-    .filter(h => h && h.name && !/^馬名\d+$/.test(String(h.name).trim()))
+    .filter(h => h && h.name)
     .map(h => {
       const rawNumber = String(h.number || '').trim();
       const name = String(h.name || '').trim();
@@ -398,37 +343,25 @@ function getValidHorses(detail) {
       return {
         number: isNumericHorseNumber(rawNumber) ? rawNumber : '',
         name,
-        bracket: String(h.bracket || '').trim() || '不明',
-        ageSex: String(h.ageSex || '').trim() || '不明',
-        weight: String(h.weight || '').trim() || '不明',
-        jockey: String(h.jockey || '').trim() || '不明',
-        trainer: String(h.trainer || '').trim() || '不明',
         popularity: String(h.popularity || '').trim() || '不明',
-        odds: String(h.odds || '').trim() || '不明',
-        recentStarts: Array.isArray(h.recentStarts) ? h.recentStarts.slice(0, 5) : []
+        odds: String(h.odds || '').trim() || '不明'
       };
     })
-    .filter(h => h.name && !/�|���/.test(h.name));
+    .filter(h => h.name && !/^馬名\d+$/.test(h.name) && !/�|���/.test(h.name));
 }
 
-function formatHorseForMark(h) {
-  if (!h) return '';
-  if (isNumericHorseNumber(h.number)) {
-    return `${h.number}番 ${h.name}`;
-  }
-  return `${h.name}`;
-}
-
-function formatHorseForBet(h) {
+function formatHorse(h) {
   if (!h) return '不明';
-  if (isNumericHorseNumber(h.number)) {
-    return `${h.number}番`;
-  }
-  return `${h.name}`;
+  return isNumericHorseNumber(h.number) ? `${h.number}番 ${h.name}` : h.name;
 }
 
-function makeSafeFallbackPrediction(detail, validHorses) {
-  const sorted = [...validHorses].sort((a, b) => {
+function formatBetTarget(h) {
+  if (!h) return '不明';
+  return isNumericHorseNumber(h.number) ? `${h.number}番` : h.name;
+}
+
+function makeSafePrediction(detail, horses) {
+  const sorted = [...horses].sort((a, b) => {
     const ap = Number(a.popularity);
     const bp = Number(b.popularity);
 
@@ -461,26 +394,25 @@ function makeSafeFallbackPrediction(detail, validHorses) {
     `出走時間：${detail.time || '不明'}\n` +
     `条件：${detail.condition || `${detail.surface || '不明'}${detail.distance || ''}`}\n\n` +
     `【最終印】\n` +
-    marks.map(([mark, h]) => `${mark} ${formatHorseForMark(h)}`).join('\n') +
+    marks.map(([mark, h]) => `${mark} ${formatHorse(h)}`).join('\n') +
     `\n\n` +
     `【短い理由】\n` +
-    `取得できた出走馬名をもとに、馬番・人気・オッズなど取得済みの情報だけで並べました。\n` +
+    `取得できた出走馬名をもとに、人気・オッズ・馬番など取得済みの情報だけで並べました。\n` +
     `馬番が正しく取れない馬は、馬名だけで表示しています。\n\n` +
     `【買い目候補】\n` +
     `500円以内：\n` +
-    `・単勝 ${formatHorseForBet(picks[0])} 500円\n\n` +
+    `・単勝 ${formatBetTarget(picks[0])} 500円\n\n` +
     `1000円以内：\n` +
-    `・単勝 ${formatHorseForBet(picks[0])} 500円\n` +
-    `・複勝 ${formatHorseForBet(picks[1])} 500円\n\n` +
+    `・単勝 ${formatBetTarget(picks[0])} 500円\n` +
+    `・複勝 ${formatBetTarget(picks[1])} 500円\n\n` +
     `※予想候補です。的中や利益を保証するものではありません。`
   );
 }
 
 async function handleResult(userText, userId = 'default') {
-  const preferredMode =
-    /重賞|G1|Ｇ1|GⅠ|ＧⅠ|G2|Ｇ2|GⅡ|ＧⅡ|G3|Ｇ3|GⅢ|ＧⅢ/.test(userText)
-      ? 'grade'
-      : 'special_or_above';
+  const preferredMode = /重賞|G1|Ｇ1|GⅠ|ＧⅠ|G2|Ｇ2|GⅡ|ＧⅡ|G3|Ｇ3|GⅢ|ＧⅢ/.test(userText)
+    ? 'grade'
+    : 'special_or_above';
 
   const { race } = await getTargetRace(userText, preferredMode, userId);
 
@@ -489,11 +421,7 @@ async function handleResult(userText, userId = 'default') {
   }
 
   const result = await fetchResult(race);
-
-  const reply =
-    `■ 結果\n` +
-    `${race.date || ''} ${race.venue}${race.raceNo}R ${race.name}\n` +
-    `${result.rawSummary}`;
+  const reply = `■ 結果\n${race.date || ''} ${race.venue}${race.raceNo}R ${race.name}\n${result.rawSummary}`;
 
   await saveToSheet({
     type: 'result',
@@ -515,27 +443,14 @@ async function handleVerify(userText) {
     `まず「レース名＋予想」で予想を保存し、その後「レース名＋結果」で結果を保存してください。\n` +
     `保存後に「集計」で成績を確認できます。`;
 
-  await saveToSheet({
-    type: 'verify_help',
-    userText,
-    aiReply: reply,
-    targetDate: getTodayJstText()
-  });
-
+  await saveToSheet({ type: 'verify_help', userText, aiReply: reply, targetDate: getTodayJstText() });
   return reply;
 }
 
 async function handleSummary(userText) {
   const s = await getSheetSummary();
   const reply = s.ok ? s.text : `集計取得失敗：${s.text}`;
-
-  await saveToSheet({
-    type: 'summary_request',
-    userText,
-    aiReply: reply,
-    targetDate: getTodayJstText()
-  });
-
+  await saveToSheet({ type: 'summary_request', userText, aiReply: reply, targetDate: getTodayJstText() });
   return reply;
 }
 
