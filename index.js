@@ -334,23 +334,52 @@ function isNumericHorseNumber(value) {
   return /^\d{1,2}$/.test(String(value || '').trim());
 }
 
+function safeText(value, fallback = '不明') {
+  const text = String(value || '').trim();
+  return text || fallback;
+}
+
 function getValidHorses(detail) {
   return (detail.horses || [])
     .filter(h => h && h.name)
     .map(h => {
       const rawNumber = String(h.number || '').trim();
-      const name = String(h.name || '').trim();
 
       return {
         number: isNumericHorseNumber(rawNumber) ? rawNumber : '',
-        name
+        bracket: safeText(h.bracket),
+        name: safeText(h.name, ''),
+        ageSex: safeText(h.ageSex),
+        weight: safeText(h.weight),
+        jockey: safeText(h.jockey),
+        trainer: safeText(h.trainer),
+        recentStarts: Array.isArray(h.recentStarts) ? h.recentStarts : []
       };
     })
-    .filter(h => h.name && isNumericHorseNumber(h.number) && !/^馬名\d+$/.test(h.name) && !/�|���/.test(h.name));
+    .filter(h =>
+      h.name &&
+      isNumericHorseNumber(h.number) &&
+      !/^馬名\d+$/.test(h.name) &&
+      !/�|���/.test(h.name)
+    );
 }
 
 function buildHorseListText(horses) {
-  return horses.map(h => `${h.number}番 ${h.name}`).join('\n');
+  return horses.map(h => {
+    const recent = h.recentStarts && h.recentStarts.length
+      ? h.recentStarts.map(r => JSON.stringify(r)).join(' / ')
+      : '不明';
+
+    return (
+      `${h.number}番 ${h.name}\n` +
+      `枠：${h.bracket}\n` +
+      `性齢：${h.ageSex}\n` +
+      `斤量：${h.weight}\n` +
+      `騎手：${h.jockey}\n` +
+      `調教師：${h.trainer}\n` +
+      `近走：${recent}`
+    );
+  }).join('\n\n');
 }
 
 async function makeAiPrediction(detail, horses) {
@@ -364,15 +393,19 @@ async function makeAiPrediction(detail, horses) {
     `レース番号：${detail.raceNo}R\n` +
     `出走時間：${detail.time || '不明'}\n` +
     `条件：${detail.condition || `${detail.surface || '不明'}${detail.distance || ''}`}\n` +
-    `コース：${detail.surface || '不明'} ${detail.distance || ''}\n\n` +
-    `【出走馬】\n` +
+    `コース：${detail.surface || '不明'} ${detail.distance || ''}\n` +
+    `ヘッダー情報：${detail.header || '不明'}\n` +
+    `補足情報：${detail.subHeader || '不明'}\n\n` +
+    `【出走馬情報】\n` +
     `${horseListText}\n\n` +
     `【厳守】\n` +
     `・uma_prompt.js と uma_knowledge.js のルールに従って予想してください。\n` +
-    `・人気とオッズは使わないでください。\n` +
+    `・人気とオッズは予想印、採点、着順予想、勝負度、危険馬、消し馬の判断に使わないでください。\n` +
+    `・人気とオッズが不明でも、それを理由に予想を止めないでください。\n` +
     `・馬番と馬名を必ず併記してください。\n` +
-    `・不明情報は作らないでください。\n` +
+    `・渡された出走馬情報だけを使い、不明情報は作らないでください。\n` +
     `・単なる馬番順に並べないでください。\n` +
+    `・取得できている騎手、斤量、性齢、調教師、条件、コース、Knowledgeを使って評価してください。\n` +
     `・買い目候補は単勝、複勝のみで、500円以内と1000円以内を出してください。\n` +
     `・的中や利益を保証しない文を最後に入れてください。\n\n` +
     `【返答形式】\n` +
@@ -381,7 +414,19 @@ async function makeAiPrediction(detail, horses) {
     `出走時間：\n` +
     `条件：\n\n` +
     `【最終印】\n` +
-    `◎ ○ ▲ ☆ △ の5頭\n\n` +
+    `◎ 馬番 馬名\n` +
+    `○ 馬番 馬名\n` +
+    `▲ 馬番 馬名\n` +
+    `☆ 馬番 馬名\n` +
+    `△ 馬番 馬名\n\n` +
+    `【5着まで】\n` +
+    `1着 馬番 馬名\n` +
+    `2着 馬番 馬名\n` +
+    `3着 馬番 馬名\n` +
+    `4着 馬番 馬名\n` +
+    `5着 馬番 馬名\n\n` +
+    `【勝負度】\n` +
+    `S/A/B+/B/C/D のどれか\n\n` +
     `【短い理由】\n` +
     `2〜4行\n\n` +
     `【買い目候補】\n` +
@@ -391,7 +436,7 @@ async function makeAiPrediction(detail, horses) {
 
   const completion = await openai.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    temperature: 0.25,
+    temperature: 0.15,
     messages: [
       { role: 'system', content: buildSystemMessage() },
       { role: 'user', content: userContent }
@@ -457,6 +502,8 @@ ${UMA_KNOWLEDGE}
 あなたは必ず「うまぴょんAI」として返答してください。
 「うまデータちゃん」と名乗ってはいけません。
 不明情報は作らないでください。
+人気とオッズは、予想印、採点、着順予想、勝負度、危険馬、消し馬の判断に使わないでください。
+人気とオッズが不明でも、それを理由に予想を止めないでください。
 ユーザーは素人なので、専門用語だけで進めず、わかりやすく答えてください。
 `;
 }
