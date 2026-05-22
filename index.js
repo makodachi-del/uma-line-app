@@ -343,25 +343,21 @@ function getValidHorses(detail) {
 
       return {
         number: isNumericHorseNumber(rawNumber) ? rawNumber : '',
-        name,
-        popularity: String(h.popularity || '').trim() || '不明',
-        odds: String(h.odds || '').trim() || '不明'
+        name
       };
     })
     .filter(h => h.name && isNumericHorseNumber(h.number) && !/^馬名\d+$/.test(h.name) && !/�|���/.test(h.name));
 }
 
 function buildHorseListText(horses) {
-  return horses.map(h => {
-    return `${h.number}番 ${h.name} / 人気:${h.popularity} / オッズ:${h.odds}`;
-  }).join('\n');
+  return horses.map(h => `${h.number}番 ${h.name}`).join('\n');
 }
 
 async function makeAiPrediction(detail, horses) {
   const horseListText = buildHorseListText(horses);
 
   const userContent =
-    `以下のJRAレースを、うまぴょんAIとして真剣に予想してください。\n\n` +
+    `以下のJRAレースを、うまぴょんAIとして予想してください。\n\n` +
     `【レース情報】\n` +
     `レース名：${detail.name}\n` +
     `競馬場：${detail.venue}\n` +
@@ -371,11 +367,12 @@ async function makeAiPrediction(detail, horses) {
     `コース：${detail.surface || '不明'} ${detail.distance || ''}\n\n` +
     `【出走馬】\n` +
     `${horseListText}\n\n` +
-    `【出力ルール】\n` +
+    `【厳守】\n` +
+    `・uma_prompt.js と uma_knowledge.js のルールに従って予想してください。\n` +
+    `・人気とオッズは使わないでください。\n` +
     `・馬番と馬名を必ず併記してください。\n` +
-    `・不明な情報は作らないでください。\n` +
+    `・不明情報は作らないでください。\n` +
     `・単なる馬番順に並べないでください。\n` +
-    `・取得できた人気、オッズ、馬番、馬名を材料にして予想してください。\n` +
     `・買い目候補は単勝、複勝のみで、500円以内と1000円以内を出してください。\n` +
     `・的中や利益を保証しない文を最後に入れてください。\n\n` +
     `【返答形式】\n` +
