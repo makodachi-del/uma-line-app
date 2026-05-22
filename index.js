@@ -313,7 +313,7 @@ async function handlePrediction(userText, userId = 'default') {
     return msg;
   }
 
-  const aiReply = makeSafePrediction(detail, horses);
+  const aiReply = await makeAiPrediction(detail, horses);
 
   await saveToSheet({
     type: 'prediction',
@@ -348,66 +348,60 @@ function getValidHorses(detail) {
         odds: String(h.odds || '').trim() || '不明'
       };
     })
-    .filter(h => h.name && !/^馬名\d+$/.test(h.name) && !/�|���/.test(h.name));
+    .filter(h => h.name && isNumericHorseNumber(h.number) && !/^馬名\d+$/.test(h.name) && !/�|���/.test(h.name));
 }
 
-function formatHorse(h) {
-  if (!h) return '不明';
-  return isNumericHorseNumber(h.number) ? `${h.number}番 ${h.name}` : h.name;
+function buildHorseListText(horses) {
+  return horses.map(h => {
+    return `${h.number}番 ${h.name} / 人気:${h.popularity} / オッズ:${h.odds}`;
+  }).join('\n');
 }
 
-function formatBetTarget(h) {
-  if (!h) return '不明';
-  return isNumericHorseNumber(h.number) ? `${h.number}番` : h.name;
-}
+async function makeAiPrediction(detail, horses) {
+  const horseListText = buildHorseListText(horses);
 
-function makeSafePrediction(detail, horses) {
-  const sorted = [...horses].sort((a, b) => {
-    const ap = Number(a.popularity);
-    const bp = Number(b.popularity);
-
-    if (Number.isFinite(ap) && Number.isFinite(bp)) return ap - bp;
-    if (Number.isFinite(ap)) return -1;
-    if (Number.isFinite(bp)) return 1;
-
-    const an = Number(a.number);
-    const bn = Number(b.number);
-
-    if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
-    if (Number.isFinite(an)) return -1;
-    if (Number.isFinite(bn)) return 1;
-
-    return String(a.name).localeCompare(String(b.name), 'ja');
-  });
-
-  const picks = sorted.slice(0, 5);
-  const marks = [
-    ['◎', picks[0]],
-    ['○', picks[1]],
-    ['▲', picks[2]],
-    ['☆', picks[3]],
-    ['△', picks[4]]
-  ].filter(([, h]) => h && h.name);
-
-  return (
-    `【うまぴょんAI予想】\n` +
+  const userContent =
+    `以下のJRAレースを、うまぴょんAIとして真剣に予想してください。\n\n` +
+    `【レース情報】\n` +
     `レース名：${detail.name}\n` +
+    `競馬場：${detail.venue}\n` +
+    `レース番号：${detail.raceNo}R\n` +
     `出走時間：${detail.time || '不明'}\n` +
-    `条件：${detail.condition || `${detail.surface || '不明'}${detail.distance || ''}`}\n\n` +
+    `条件：${detail.condition || `${detail.surface || '不明'}${detail.distance || ''}`}\n` +
+    `コース：${detail.surface || '不明'} ${detail.distance || ''}\n\n` +
+    `【出走馬】\n` +
+    `${horseListText}\n\n` +
+    `【出力ルール】\n` +
+    `・馬番と馬名を必ず併記してください。\n` +
+    `・不明な情報は作らないでください。\n` +
+    `・単なる馬番順に並べないでください。\n` +
+    `・取得できた人気、オッズ、馬番、馬名を材料にして予想してください。\n` +
+    `・買い目候補は単勝、複勝のみで、500円以内と1000円以内を出してください。\n` +
+    `・的中や利益を保証しない文を最後に入れてください。\n\n` +
+    `【返答形式】\n` +
+    `【うまぴょんAI予想】\n` +
+    `レース名：\n` +
+    `出走時間：\n` +
+    `条件：\n\n` +
     `【最終印】\n` +
-    marks.map(([mark, h]) => `${mark} ${formatHorse(h)}`).join('\n') +
-    `\n\n` +
+    `◎ ○ ▲ ☆ △ の5頭\n\n` +
     `【短い理由】\n` +
-    `取得できた出走馬名をもとに、人気・オッズ・馬番など取得済みの情報だけで並べました。\n` +
-    `馬番が正しく取れない馬は、馬名だけで表示しています。\n\n` +
+    `2〜4行\n\n` +
     `【買い目候補】\n` +
     `500円以内：\n` +
-    `・単勝 ${formatBetTarget(picks[0])} 500円\n\n` +
-    `1000円以内：\n` +
-    `・単勝 ${formatBetTarget(picks[0])} 500円\n` +
-    `・複勝 ${formatBetTarget(picks[1])} 500円\n\n` +
-    `※予想候補です。的中や利益を保証するものではありません。`
-  );
+    `1000円以内：\n\n` +
+    `※予想候補です。的中や利益を保証するものではありません。`;
+
+  const completion = await openai.chat.completions.create({
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    temperature: 0.25,
+    messages: [
+      { role: 'system', content: buildSystemMessage() },
+      { role: 'user', content: userContent }
+    ]
+  });
+
+  return completion.choices?.[0]?.message?.content || 'うまぴょんAIの予想結果が空でした。';
 }
 
 async function handleResult(userText, userId = 'default') {
