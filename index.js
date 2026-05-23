@@ -313,7 +313,8 @@ async function handlePrediction(userText, userId = 'default') {
     return msg;
   }
 
-  const aiReply = await makeAiPrediction(detail, horses);
+  const aiReplyRaw = await makeAiPrediction(detail, horses);
+  const aiReply = normalizePredictionReply(aiReplyRaw);
 
   await saveToSheet({
     type: 'prediction',
@@ -401,6 +402,23 @@ function buildHorseListText(horses) {
   }).join('\n\n');
 }
 
+function normalizePredictionReply(text) {
+  let s = String(text || '');
+
+  s = s.replace(/(\d{1,2})番/g, '$1');
+  s = s.replace(/【買い目候補】/g, '【買い目の候補だよ】');
+  s = s.replace(/【短い理由】/g, '【予想理由】');
+
+  s = s.replace(/勝負度：S(?!（)/g, '勝負度：S（かなり自信ありだよ）');
+  s = s.replace(/勝負度：A(?!（)/g, '勝負度：A（しっかり狙えそうだよ）');
+  s = s.replace(/勝負度：B\+(?!（)/g, '勝負度：B+（楽しみだけど少し注意だよ）');
+  s = s.replace(/勝負度：B(?![+（])/g, '勝負度：B（標準くらいだよ）');
+  s = s.replace(/勝負度：C(?!（)/g, '勝負度：C（混戦で注意だよ）');
+  s = s.replace(/勝負度：D(?!（)/g, '勝負度：D（見送り寄りだよ）');
+
+  return s;
+}
+
 async function makeAiPrediction(detail, horses) {
   const horseListText = buildHorseListText(horses);
   const recentReadyCount = countRecentReadyHorses(horses);
@@ -416,7 +434,7 @@ async function makeAiPrediction(detail, horses) {
     `コース：${detail.surface || '不明'} ${detail.distance || ''}\n` +
     `ヘッダー情報：${detail.header || '不明'}\n` +
     `補足情報：${detail.subHeader || '不明'}\n` +
-    `近走取得：${horses.length}頭中${recentReadyCount}頭\n\n` +
+    `近走確認：${horses.length}頭中${recentReadyCount}頭\n\n` +
     `【出走馬情報】\n` +
     `${horseListText}\n\n` +
     `【厳守】\n` +
@@ -433,6 +451,8 @@ async function makeAiPrediction(detail, horses) {
     `・取得できている近走、騎手、斤量、性齢、調教師、条件、コース、Knowledgeを使って評価してください。\n` +
     `・近走が取得できている場合は、予想理由に自然に反映してください。\n` +
     `・近走が取得できていない場合は、作らずに「近走は不明」と扱ってください。\n` +
+    `・勝負度は「B（標準くらいだよ）」のように短い補足を付けてください。\n` +
+    `・買い目候補の見出しは「買い目の候補だよ」にしてください。\n` +
     `・買い目候補は単勝、複勝、ワイドのみで出してください。\n` +
     `・単勝だけにしないでください。\n` +
     `・500円以内プランは、買い目すべての合計金額を必ず500円以内にしてください。\n` +
@@ -447,7 +467,7 @@ async function makeAiPrediction(detail, horses) {
     `レース名：\n` +
     `出走時間：\n` +
     `条件：\n` +
-    `近走取得：${horses.length}頭中${recentReadyCount}頭\n\n` +
+    `近走確認：${horses.length}頭中${recentReadyCount}頭\n\n` +
     `【最終印】\n` +
     `◎ 数字 馬名\n` +
     `○ 数字 馬名\n` +
@@ -461,10 +481,10 @@ async function makeAiPrediction(detail, horses) {
     `4着 数字 馬名\n` +
     `5着 数字 馬名\n\n` +
     `【勝負度】\n` +
-    `S/A/B+/B/C/D のどれか\n\n` +
+    `S/A/B+/B/C/D のどれか＋短い補足\n\n` +
     `【予想理由】\n` +
     `2〜4行。保育士さん風にやさしく。\n\n` +
-    `【買い目候補】\n` +
+    `【買い目の候補だよ】\n` +
     `500円以内：\n` +
     `・単勝 数字 金額\n` +
     `・複勝 数字 金額\n` +
