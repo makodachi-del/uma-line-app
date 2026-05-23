@@ -427,7 +427,7 @@ async function makeAiPrediction(detail, horses) {
     `5着 馬番 馬名\n\n` +
     `【勝負度】\n` +
     `S/A/B+/B/C/D のどれか\n\n` +
-    `【短い理由】\n` +
+    `【予想理由】\n` +
     `2〜4行\n\n` +
     `【買い目候補】\n` +
     `500円以内：\n` +
