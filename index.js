@@ -364,26 +364,46 @@ function getValidHorses(detail) {
     );
 }
 
+function countRecentReadyHorses(horses) {
+  return horses.filter(h => Array.isArray(h.recentStarts) && h.recentStarts.length > 0).length;
+}
+
+function buildRecentText(horse) {
+  if (!horse.recentStarts || horse.recentStarts.length === 0) {
+    return '不明';
+  }
+
+  return horse.recentStarts.slice(0, 5).map(r => {
+    return [
+      r.date || '日付不明',
+      r.raceName || 'レース名不明',
+      `着順:${r.rank || '不明'}`,
+      `距離:${r.course || '不明'}`,
+      `馬場:${r.going || '不明'}`,
+      `上り:${r.last3f || '不明'}`,
+      `通過:${r.passing || '不明'}`,
+      `着差:${r.margin || '不明'}`
+    ].join(' / ');
+  }).join('\n');
+}
+
 function buildHorseListText(horses) {
   return horses.map(h => {
-    const recent = h.recentStarts && h.recentStarts.length
-      ? h.recentStarts.map(r => JSON.stringify(r)).join(' / ')
-      : '不明';
-
     return (
-      `${h.number}番 ${h.name}\n` +
+      `${h.number} ${h.name}\n` +
       `枠：${h.bracket}\n` +
       `性齢：${h.ageSex}\n` +
       `斤量：${h.weight}\n` +
       `騎手：${h.jockey}\n` +
       `調教師：${h.trainer}\n` +
-      `近走：${recent}`
+      `近走：\n${buildRecentText(h)}`
     );
   }).join('\n\n');
 }
 
 async function makeAiPrediction(detail, horses) {
   const horseListText = buildHorseListText(horses);
+  const recentReadyCount = countRecentReadyHorses(horses);
 
   const userContent =
     `以下のJRAレースを、うまぴょんAIとして予想してください。\n\n` +
@@ -395,17 +415,24 @@ async function makeAiPrediction(detail, horses) {
     `条件：${detail.condition || `${detail.surface || '不明'}${detail.distance || ''}`}\n` +
     `コース：${detail.surface || '不明'} ${detail.distance || ''}\n` +
     `ヘッダー情報：${detail.header || '不明'}\n` +
-    `補足情報：${detail.subHeader || '不明'}\n\n` +
+    `補足情報：${detail.subHeader || '不明'}\n` +
+    `近走取得：${horses.length}頭中${recentReadyCount}頭\n\n` +
     `【出走馬情報】\n` +
     `${horseListText}\n\n` +
     `【厳守】\n` +
     `・uma_prompt.js と uma_knowledge.js のルールに従って予想してください。\n` +
+    `・保育士さんがやさしく話すような、あたたかい口調にしてください。\n` +
+    `・ただし予想は真剣に行い、ふざけすぎないでください。\n` +
     `・人気とオッズは予想印、採点、着順予想、勝負度、危険馬、消し馬の判断に使わないでください。\n` +
     `・人気とオッズが不明でも、それを理由に予想を止めないでください。\n` +
+    `・予想印と5着までの馬番は「12番」ではなく「12」のように数字だけで表示してください。\n` +
+    `・買い目も「12番」ではなく「12」、「12番-3番」ではなく「12-3」と表示してください。\n` +
     `・馬番と馬名を必ず併記してください。\n` +
     `・渡された出走馬情報だけを使い、不明情報は作らないでください。\n` +
     `・単なる馬番順に並べないでください。\n` +
-    `・取得できている騎手、斤量、性齢、調教師、条件、コース、Knowledgeを使って評価してください。\n` +
+    `・取得できている近走、騎手、斤量、性齢、調教師、条件、コース、Knowledgeを使って評価してください。\n` +
+    `・近走が取得できている場合は、予想理由に自然に反映してください。\n` +
+    `・近走が取得できていない場合は、作らずに「近走は不明」と扱ってください。\n` +
     `・買い目候補は単勝、複勝、ワイドのみで出してください。\n` +
     `・単勝だけにしないでください。\n` +
     `・500円以内プランは、買い目すべての合計金額を必ず500円以内にしてください。\n` +
@@ -413,40 +440,41 @@ async function makeAiPrediction(detail, horses) {
     `・各買い目の金額は100円単位にしてください。\n` +
     `・500円以内プランと1000円以内プランは、同じ内容の丸写しにしないでください。\n` +
     `・ワイドは「馬番-馬番」で表示してください。\n` +
-    `・合計金額を各プランの最後に必ず表示してください。\n` +
+    `・合計金額は「合計：500円」「合計：800円」のように実額で表示してください。\n` +
     `・的中や利益を保証しない文を最後に入れてください。\n\n` +
     `【返答形式】\n` +
     `【うまぴょんAI予想】\n` +
     `レース名：\n` +
     `出走時間：\n` +
-    `条件：\n\n` +
+    `条件：\n` +
+    `近走取得：${horses.length}頭中${recentReadyCount}頭\n\n` +
     `【最終印】\n` +
-    `◎ 馬番 馬名\n` +
-    `○ 馬番 馬名\n` +
-    `▲ 馬番 馬名\n` +
-    `☆ 馬番 馬名\n` +
-    `△ 馬番 馬名\n\n` +
+    `◎ 数字 馬名\n` +
+    `○ 数字 馬名\n` +
+    `▲ 数字 馬名\n` +
+    `☆ 数字 馬名\n` +
+    `△ 数字 馬名\n\n` +
     `【5着まで】\n` +
-    `1着 馬番 馬名\n` +
-    `2着 馬番 馬名\n` +
-    `3着 馬番 馬名\n` +
-    `4着 馬番 馬名\n` +
-    `5着 馬番 馬名\n\n` +
+    `1着 数字 馬名\n` +
+    `2着 数字 馬名\n` +
+    `3着 数字 馬名\n` +
+    `4着 数字 馬名\n` +
+    `5着 数字 馬名\n\n` +
     `【勝負度】\n` +
     `S/A/B+/B/C/D のどれか\n\n` +
     `【予想理由】\n` +
-    `2〜4行\n\n` +
+    `2〜4行。保育士さん風にやさしく。\n\n` +
     `【買い目候補】\n` +
     `500円以内：\n` +
-    `・単勝 馬番 金額\n` +
-    `・複勝 馬番 金額\n` +
-    `・ワイド 馬番-馬番 金額\n` +
-    `合計：500円以内\n\n` +
+    `・単勝 数字 金額\n` +
+    `・複勝 数字 金額\n` +
+    `・ワイド 数字-数字 金額\n` +
+    `合計：実額\n\n` +
     `1000円以内：\n` +
-    `・単勝 馬番 金額\n` +
-    `・複勝 馬番 金額\n` +
-    `・ワイド 馬番-馬番 金額\n` +
-    `合計：1000円以内\n\n` +
+    `・単勝 数字 金額\n` +
+    `・複勝 数字 金額\n` +
+    `・ワイド 数字-数字 金額\n` +
+    `合計：実額\n\n` +
     `※予想候補です。的中や利益を保証するものではありません。`;
 
   const completion = await openai.chat.completions.create({
@@ -519,7 +547,9 @@ ${UMA_KNOWLEDGE}
 不明情報は作らないでください。
 人気とオッズは、予想印、採点、着順予想、勝負度、危険馬、消し馬の判断に使わないでください。
 人気とオッズが不明でも、それを理由に予想を止めないでください。
+予想印、5着まで、買い目では「番」を付けず、数字だけで表示してください。
 買い目候補は、各プランの合計金額を必ず上限以内にしてください。
+返答は保育士さんがやさしく説明するような口調にしてください。
 ユーザーは素人なので、専門用語だけで進めず、わかりやすく答えてください。
 `;
 }
