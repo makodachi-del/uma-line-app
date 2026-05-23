@@ -326,6 +326,25 @@ function textAt(cells, index) {
   return cleanText(cells[index] || '');
 }
 
+function absolutizeUrl(url) {
+  const u = cleanText(url);
+  if (!u) return '';
+  if (u.startsWith('https://')) return u;
+  if (u.startsWith('http://')) return u.replace('http://', 'https://');
+  if (u.startsWith('//')) return `https:${u}`;
+  if (u.startsWith('/')) return `https://db.netkeiba.com${u}`;
+  return u;
+}
+
+function pickHorseLink($, row) {
+  const href =
+    row.find('a[href*="/horse/"]').first().attr('href') ||
+    row.find('a[href*="db.netkeiba.com/horse"]').first().attr('href') ||
+    '';
+
+  return absolutizeUrl(href);
+}
+
 function pickHorseName($, row, cells) {
   const byLink =
     cleanText(row.find('a[href*="/horse/"]').first().text()) ||
@@ -382,6 +401,7 @@ function normalizeHorse(h) {
     weight: cleanText(h.weight || '不明'),
     jockey: cleanText(h.jockey || '不明'),
     trainer: cleanText(h.trainer || '不明'),
+    horseUrl: cleanText(h.horseUrl || ''),
     odds: cleanText(h.odds || '不明'),
     popularity: cleanText(h.popularity || '不明'),
     recentStarts: Array.isArray(h.recentStarts) ? h.recentStarts : []
@@ -453,6 +473,7 @@ function parseHorseRows($) {
 
     const jockey = pickJockey($, row, cells);
     const trainer = pickTrainer($, row, cells);
+    const horseUrl = pickHorseLink($, row);
 
     const odds =
       cleanText(row.find('.Odds').first().text()) ||
@@ -472,6 +493,7 @@ function parseHorseRows($) {
       weight,
       jockey,
       trainer,
+      horseUrl,
       odds,
       popularity,
       recentStarts: []
@@ -485,6 +507,133 @@ function parseHorseRows($) {
   });
 
   return horses;
+}
+
+function normalizeHeaderText(text) {
+  return cleanText(text).replace(/\s/g, '');
+}
+
+function buildHeaderMap($, table) {
+  const map = {};
+  const headerCells = table.find('tr').first().find('th').toArray();
+
+  headerCells.forEach((th, index) => {
+    const key = normalizeHeaderText($(th).text());
+    if (key) map[key] = index;
+  });
+
+  return map;
+}
+
+function getByHeader(cells, headerMap, names, fallbackIndex = -1) {
+  for (const name of names) {
+    const key = normalizeHeaderText(name);
+    if (Object.prototype.hasOwnProperty.call(headerMap, key)) {
+      return cleanText(cells[headerMap[key]] || '');
+    }
+  }
+
+  if (fallbackIndex >= 0) {
+    return cleanText(cells[fallbackIndex] || '');
+  }
+
+  return '';
+}
+
+function parseRecentStartsFromHorseHtml(html) {
+  const $ = cheerio.load(html);
+  const table =
+    $('table.db_h_race_results').first().length ? $('table.db_h_race_results').first() :
+    $('table.race_table_01').first().length ? $('table.race_table_01').first() :
+    $('table').filter((_, el) => {
+      const t = cleanText($(el).text());
+      return /レース名/.test(t) && /着順/.test(t) && /距離/.test(t);
+    }).first();
+
+  if (!table || !table.length) return [];
+
+  const headerMap = buildHeaderMap($, table);
+  const starts = [];
+
+  table.find('tr').each((_, el) => {
+    const row = $(el);
+    const tds = row.find('td').toArray();
+    if (!tds.length) return;
+
+    const cells = tds.map(td => cleanText($(td).text()));
+
+    const date = getByHeader(cells, headerMap, ['日付'], 0);
+    const raceName = getByHeader(cells, headerMap, ['レース名'], 4);
+    const rank = getByHeader(cells, headerMap, ['着順'], 11);
+    const jockey = getByHeader(cells, headerMap, ['騎手'], 12);
+    const weight = getByHeader(cells, headerMap, ['斤量'], 13);
+    const course = getByHeader(cells, headerMap, ['距離'], 14);
+    const going = getByHeader(cells, headerMap, ['馬場'], 15);
+    const time = getByHeader(cells, headerMap, ['タイム'], 17);
+    const margin = getByHeader(cells, headerMap, ['着差'], 18);
+    const passing = getByHeader(cells, headerMap, ['通過'], 20);
+    const pace = getByHeader(cells, headerMap, ['ペース'], 21);
+    const last3f = getByHeader(cells, headerMap, ['上り', '上がり'], 22);
+    const bodyWeight = getByHeader(cells, headerMap, ['馬体重'], 23);
+
+    if (!date || !raceName) return;
+    if (/取消|除外|中止/.test(rank)) return;
+
+    starts.push({
+      date,
+      raceName,
+      rank: rank || '不明',
+      jockey: jockey || '不明',
+      weight: weight || '不明',
+      course: course || '不明',
+      going: going || '不明',
+      time: time || '不明',
+      margin: margin || '不明',
+      passing: passing || '不明',
+      pace: pace || '不明',
+      last3f: last3f || '不明',
+      bodyWeight: bodyWeight || '不明'
+    });
+  });
+
+  return starts.slice(0, 5);
+}
+
+async function fetchRecentStartsForHorse(horse) {
+  if (!horse || !horse.horseUrl) return [];
+
+  try {
+    const html = await fetchHtml(horse.horseUrl);
+    return parseRecentStartsFromHorseHtml(html);
+  } catch (error) {
+    console.error(`recentStarts error: ${horse.name} ${error.message}`);
+    return [];
+  }
+}
+
+async function addRecentStartsToHorses(horses) {
+  const result = [];
+  const concurrency = 3;
+  let index = 0;
+
+  async function worker() {
+    while (index < horses.length) {
+      const currentIndex = index;
+      index += 1;
+
+      const horse = horses[currentIndex];
+      const recentStarts = await fetchRecentStartsForHorse(horse);
+      result[currentIndex] = {
+        ...horse,
+        recentStarts
+      };
+    }
+  }
+
+  const workers = Array.from({ length: concurrency }, () => worker());
+  await Promise.all(workers);
+
+  return result.filter(Boolean);
 }
 
 async function fetchRaceDetail(race) {
@@ -507,6 +656,7 @@ async function fetchRaceDetail(race) {
   ).length;
 
   const isEntryConfirmed = horses.length >= 5 && validNumberCount >= 5;
+  const horsesWithRecentStarts = isEntryConfirmed ? await addRecentStartsToHorses(horses) : [];
 
   return {
     ...race,
@@ -525,7 +675,7 @@ async function fetchRaceDetail(race) {
     paceText: isEntryConfirmed
       ? '出馬表取得済み。取得できない情報は作らないでください。'
       : '出馬表未確定。正式予想は行わないでください。',
-    horses: isEntryConfirmed ? horses : []
+    horses: isEntryConfirmed ? horsesWithRecentStarts : []
   };
 }
 
