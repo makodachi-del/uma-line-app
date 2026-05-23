@@ -93,6 +93,46 @@ function getTargetDates(userText) {
   return [formatDateYmd(today)];
 }
 
+function countBadChars(text) {
+  return (String(text || '').match(/�|���/g) || []).length;
+}
+
+function scoreJapaneseHtml(text) {
+  const s = String(text || '');
+  let score = 0;
+
+  if (/競馬|馬名|騎手|レース|着順|距離|出馬表|netkeiba/i.test(s)) score += 10;
+  if (/<html|<table|<tr|<td|charset/i.test(s)) score += 5;
+  score -= countBadChars(s) * 20;
+
+  return score;
+}
+
+function decodeHtmlBuffer(buffer, contentType = '') {
+  const ct = String(contentType || '').toLowerCase();
+
+  if (/charset\s*=\s*euc-jp|charset\s*=\s*eucjp/.test(ct)) {
+    return iconv.decode(buffer, 'euc-jp');
+  }
+
+  if (/charset\s*=\s*shift_jis|charset\s*=\s*sjis/.test(ct)) {
+    return iconv.decode(buffer, 'shift_jis');
+  }
+
+  if (/charset\s*=\s*utf-8|charset\s*=\s*utf8/.test(ct)) {
+    return iconv.decode(buffer, 'utf-8');
+  }
+
+  const utf8 = iconv.decode(buffer, 'utf-8');
+  const euc = iconv.decode(buffer, 'euc-jp');
+  const sjis = iconv.decode(buffer, 'shift_jis');
+
+  const candidates = [utf8, euc, sjis];
+  candidates.sort((a, b) => scoreJapaneseHtml(b) - scoreJapaneseHtml(a));
+
+  return candidates[0];
+}
+
 async function fetchHtml(url) {
   const res = await fetch(url, {
     headers: {
@@ -109,13 +149,7 @@ async function fetchHtml(url) {
     throw new Error(`HTTP ${res.status} ${url}`);
   }
 
-  const utf8Text = iconv.decode(buffer, 'utf-8');
-
-  if (!utf8Text.includes('���') && !utf8Text.includes('�')) {
-    return utf8Text;
-  }
-
-  return iconv.decode(buffer, 'euc-jp');
+  return decodeHtmlBuffer(buffer, res.headers.get('content-type') || '');
 }
 
 function raceIdToVenue(raceId) {
@@ -340,13 +374,51 @@ function absolutizeUrl(url) {
   }
 }
 
+function horseIdToUrl(horseId) {
+  const id = cleanText(horseId);
+  if (!/^\d{6,12}$/.test(id)) return '';
+  return `https://db.netkeiba.com/horse/${id}/`;
+}
+
 function pickHorseLink($, row) {
-  const href =
+  const directHref =
     row.find('a[href*="/horse/"]').first().attr('href') ||
     row.find('a[href*="db.netkeiba.com/horse"]').first().attr('href') ||
+    row.find('a[href*="horse_id="]').first().attr('href') ||
     '';
 
-  return absolutizeUrl(href);
+  if (directHref) {
+    const directUrl = absolutizeUrl(directHref);
+    const idFromDirect =
+      directUrl.match(/\/horse\/(\d{6,12})/)?.[1] ||
+      directUrl.match(/horse_id=(\d{6,12})/)?.[1] ||
+      '';
+
+    if (idFromDirect) return horseIdToUrl(idFromDirect);
+    return directUrl;
+  }
+
+  const attrs = [];
+  row.find('*').each((_, el) => {
+    const node = $(el);
+    const rawAttrs = el.attribs || {};
+    Object.keys(rawAttrs).forEach(k => {
+      attrs.push(`${k}=${rawAttrs[k]}`);
+    });
+  });
+
+  const attrText = attrs.join(' ');
+  const rowHtml = $.html(row);
+
+  const horseId =
+    attrText.match(/horse[_-]?id=["']?(\d{6,12})/i)?.[1] ||
+    attrText.match(/HorseID["']?\s*[:=]\s*["']?(\d{6,12})/i)?.[1] ||
+    rowHtml.match(/\/horse\/(\d{6,12})/)?.[1] ||
+    rowHtml.match(/horse_id=(\d{6,12})/)?.[1] ||
+    rowHtml.match(/data-horse-id=["']?(\d{6,12})/i)?.[1] ||
+    '';
+
+  return horseIdToUrl(horseId);
 }
 
 function pickHorseName($, row, cells) {
@@ -437,8 +509,10 @@ function parseHorseRows($) {
     const hasHorse =
       row.find('a[href*="/horse/"]').length ||
       row.find('a[href*="db.netkeiba.com/horse"]').length ||
+      row.find('a[href*="horse_id="]').length ||
       row.find('.HorseName').length ||
-      row.find('.Horse_Name').length;
+      row.find('.Horse_Name').length ||
+      /horse[_-]?id|\/horse\/\d{6,12}/i.test($.html(row));
 
     if (!hasHorse) continue;
 
@@ -641,9 +715,12 @@ function parseRecentStartsFromHorseHtml(html) {
 async function fetchRecentStartsForHorse(horse) {
   if (!horse || !horse.horseUrl) return [];
 
+  const base = horse.horseUrl.endsWith('/') ? horse.horseUrl : `${horse.horseUrl}/`;
+
   const urls = [
-    horse.horseUrl,
-    horse.horseUrl.endsWith('/') ? `${horse.horseUrl}result/` : `${horse.horseUrl}/result/`
+    base,
+    `${base}result/`,
+    base.replace('https://db.netkeiba.com/horse/', 'https://db.netkeiba.com/horse/result/')
   ];
 
   for (const url of urls) {
