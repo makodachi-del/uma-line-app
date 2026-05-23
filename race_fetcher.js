@@ -332,8 +332,12 @@ function absolutizeUrl(url) {
   if (u.startsWith('https://')) return u;
   if (u.startsWith('http://')) return u.replace('http://', 'https://');
   if (u.startsWith('//')) return `https:${u}`;
-  if (u.startsWith('/')) return `https://db.netkeiba.com${u}`;
-  return u;
+
+  try {
+    return new URL(u, 'https://db.netkeiba.com/').toString();
+  } catch (_) {
+    return u;
+  }
 }
 
 function pickHorseLink($, row) {
@@ -510,12 +514,15 @@ function parseHorseRows($) {
 }
 
 function normalizeHeaderText(text) {
-  return cleanText(text).replace(/\s/g, '');
+  return cleanText(text).replace(/\s/g, '').replace(/[()（）]/g, '');
 }
 
 function buildHeaderMap($, table) {
   const map = {};
-  const headerCells = table.find('tr').first().find('th').toArray();
+  const headerRow =
+    table.find('tr').filter((_, el) => $(el).find('th').length > 3).first();
+
+  const headerCells = headerRow.find('th').toArray();
 
   headerCells.forEach((th, index) => {
     const key = normalizeHeaderText($(th).text());
@@ -540,18 +547,25 @@ function getByHeader(cells, headerMap, names, fallbackIndex = -1) {
   return '';
 }
 
-function parseRecentStartsFromHorseHtml(html) {
-  const $ = cheerio.load(html);
-  const table =
-    $('table.db_h_race_results').first().length ? $('table.db_h_race_results').first() :
-    $('table.race_table_01').first().length ? $('table.race_table_01').first() :
-    $('table').filter((_, el) => {
-      const t = cleanText($(el).text());
-      return /レース名/.test(t) && /着順/.test(t) && /距離/.test(t);
-    }).first();
+function isRaceResultLikeTable($, table) {
+  const text = cleanText(table.text());
+  return /レース名/.test(text) && /着順/.test(text) && /距離/.test(text);
+}
 
-  if (!table || !table.length) return [];
+function pickRecentResultTables($) {
+  const tables = [];
 
+  $('table').each((_, el) => {
+    const table = $(el);
+    if (isRaceResultLikeTable($, table)) {
+      tables.push(table);
+    }
+  });
+
+  return tables;
+}
+
+function parseRecentStartsFromTable($, table) {
   const headerMap = buildHeaderMap($, table);
   const starts = [];
 
@@ -573,10 +587,11 @@ function parseRecentStartsFromHorseHtml(html) {
     const margin = getByHeader(cells, headerMap, ['着差'], 18);
     const passing = getByHeader(cells, headerMap, ['通過'], 20);
     const pace = getByHeader(cells, headerMap, ['ペース'], 21);
-    const last3f = getByHeader(cells, headerMap, ['上り', '上がり'], 22);
+    const last3f = getByHeader(cells, headerMap, ['上り', '上がり', '上3F'], 22);
     const bodyWeight = getByHeader(cells, headerMap, ['馬体重'], 23);
 
     if (!date || !raceName) return;
+    if (!/\d{4}\/\d{1,2}\/\d{1,2}|\d{4}\.\d{1,2}\.\d{1,2}/.test(date)) return;
     if (/取消|除外|中止/.test(rank)) return;
 
     starts.push({
@@ -596,24 +611,57 @@ function parseRecentStartsFromHorseHtml(html) {
     });
   });
 
+  return starts;
+}
+
+function parseRecentStartsFromHorseHtml(html) {
+  const $ = cheerio.load(html);
+  const starts = [];
+
+  const mainTable =
+    $('table.db_h_race_results').first().length ? $('table.db_h_race_results').first() :
+    $('table.race_table_01').first().length ? $('table.race_table_01').first() :
+    null;
+
+  if (mainTable && mainTable.length) {
+    starts.push(...parseRecentStartsFromTable($, mainTable));
+  }
+
+  if (starts.length === 0) {
+    const tables = pickRecentResultTables($);
+    for (const table of tables) {
+      starts.push(...parseRecentStartsFromTable($, table));
+      if (starts.length > 0) break;
+    }
+  }
+
   return starts.slice(0, 5);
 }
 
 async function fetchRecentStartsForHorse(horse) {
   if (!horse || !horse.horseUrl) return [];
 
-  try {
-    const html = await fetchHtml(horse.horseUrl);
-    return parseRecentStartsFromHorseHtml(html);
-  } catch (error) {
-    console.error(`recentStarts error: ${horse.name} ${error.message}`);
-    return [];
+  const urls = [
+    horse.horseUrl,
+    horse.horseUrl.endsWith('/') ? `${horse.horseUrl}result/` : `${horse.horseUrl}/result/`
+  ];
+
+  for (const url of urls) {
+    try {
+      const html = await fetchHtml(url);
+      const starts = parseRecentStartsFromHorseHtml(html);
+      if (starts.length > 0) return starts;
+    } catch (error) {
+      console.error(`recentStarts error: ${horse.name} ${url} ${error.message}`);
+    }
   }
+
+  return [];
 }
 
 async function addRecentStartsToHorses(horses) {
   const result = [];
-  const concurrency = 3;
+  const concurrency = 2;
   let index = 0;
 
   async function worker() {
