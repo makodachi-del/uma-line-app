@@ -408,6 +408,15 @@ function normalizeWideLineSeparators(text) {
     .map(line => {
       if (!/ワイド/.test(line)) return line;
 
+      const moneyMatch = line.match(/(\d{2,5})\s*円/);
+      const money = moneyMatch ? moneyMatch[1] : '';
+
+      const nums = line.match(/\d{1,2}/g) || [];
+      if (nums.length >= 2) {
+        const amountText = money ? ` ${money}円` : '';
+        return line.replace(/ワイド.*$/g, `ワイド ${nums[0]} － ${nums[1]}${amountText}`);
+      }
+
       return line
         .replace(/(\d{1,2})\s*[-‐-‒–—―−ーｰ－]\s*(\d{1,2})/g, '$1 － $2')
         .replace(/(\d{1,2})\s+－\s+(\d{1,2})/g, '$1 － $2');
